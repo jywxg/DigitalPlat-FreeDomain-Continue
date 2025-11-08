@@ -1,5 +1,5 @@
 # renew.py
-# 最后更新时间: 2025-11-08 (已集成反检测策略)
+# 最后更新时间: 2025-11-08 (已集成 playwright-stealth 和 Headless=False 策略)
 # 这是一个集成了所有功能的完整版本脚本
 
 import os
@@ -11,6 +11,7 @@ import json
 import logging
 from datetime import datetime
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
+from playwright_stealth import stealth_async # <-- 1. 引入 stealth
 
 # 配置日志
 logging.basicConfig(
@@ -20,13 +21,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # --- 1. 从环境变量中读取配置 ---
-# DigitalPlat 账号信息
 DP_EMAIL = os.getenv("DP_EMAIL")
 DP_PASSWORD = os.getenv("DP_PASSWORD")
-
-# Bark 通知配置 (支持官方及自建服务器)
 BARK_KEY = os.getenv("BARK_KEY")
-BARK_SERVER = os.getenv("BARK_SERVER")  # 可选, 您的自建 Bark 服务器地址
+BARK_SERVER = os.getenv("BARK_SERVER")
 
 # --- 2. 网站固定 URL ---
 LOGIN_URL = "https://dash.domain.digitalplat.org/auth/login"
@@ -37,9 +35,14 @@ TIMEOUTS = {
     "page_load": 60000,
     "element_wait": 30000,
     "navigation": 60000,
-    "login_wait": 180000  # 保持 180 秒以等待 CF 验证
+    "login_wait": 180000
 }
 
+# [ send_bark_notification, save_results, retry_operation, simulate_human_behavior, add_anti_detection_scripts 函数保持不变 ]
+# ... (为节约篇幅，此处省略，请保留您原有的这几个函数)...
+#
+# 注意：为确保代码完整，我将把所有函数复制过来
+#
 def validate_config():
     """验证必需的环境变量是否已设置"""
     required_vars = {
@@ -58,23 +61,13 @@ def send_bark_notification(title, body, level="active", badge=None):
     """
     发送 Bark 推送通知。
     支持自建服务器地址。
-
-    Args:
-        title: 通知标题
-        body: 通知内容
-        level: 通知级别 (active, timeSensitive, passive)
-        badge: 应用图标上显示的数字
     """
     if not BARK_KEY:
         logger.info("BARK_KEY 未设置，跳过发送通知。")
         return
 
-    # 如果用户设置了 BARK_SERVER，则使用该地址，否则使用官方公共地址
     server_url = BARK_SERVER if BARK_SERVER else "https://api.day.app"
-
-    # 使用 rstrip('/') 清理末尾可能存在的斜杠，让地址拼接更健壮
     api_url = f"{server_url.rstrip('/')}/{BARK_KEY}"
-
     logger.info(f"正在向 Bark 服务器 {server_url} 发送通知: {title}")
 
     try:
@@ -88,7 +81,7 @@ def send_bark_notification(title, body, level="active", badge=None):
             payload["badge"] = badge
 
         response = requests.post(api_url, json=payload, timeout=10)
-        response.raise_for_status()  # 如果请求失败 (例如 4xx, 5xx 错误) 则抛出异常
+        response.raise_for_status()
         logger.info("Bark 通知已成功发送。")
     except requests.exceptions.RequestException as e:
         logger.error(f"发送 Bark 通知时发生网络错误: {e}")
@@ -113,14 +106,7 @@ def save_results(renewed_domains, failed_domains):
         logger.error(f"保存结果时发生错误: {e}")
 
 async def retry_operation(operation, max_retries=3, delay=2):
-    """
-    重试操作的通用函数
-
-    Args:
-        operation: 要执行的异步操作
-        max_retries: 最大重试次数
-        delay: 重试之间的延迟（秒）
-    """
+    """重试操作的通用函数"""
     for attempt in range(max_retries):
         try:
             return await operation()
@@ -132,21 +118,17 @@ async def retry_operation(operation, max_retries=3, delay=2):
 
 async def simulate_human_behavior(page):
     """模拟人类行为"""
-    # 随机鼠标移动
     await page.mouse.move(
         random.randint(100, 500),
         random.randint(100, 500)
     )
-    # 随机延迟
     await asyncio.sleep(random.uniform(0.5, 2))
 
 async def setup_browser_context(playwright):
     """
     设置浏览器上下文
-    (已修改为使用 Chromium 并应用 domains.py 中的反检测参数)
+    (已修改为使用 Headless=False)
     """
-    
-    # 借鉴自 domains.py 的成功启动参数，适用于容器环境 (如 GitHub Actions)
     browser_args = [
         '--no-sandbox',
         '--disable-dev-shm-usage',
@@ -158,13 +140,12 @@ async def setup_browser_context(playwright):
         '--disable-features=site-per-process',
         '--disable-breakpad',
         '--disable-client-side-phishing-detection',
-        '--window-size=1920,1080', # 保留原有的窗口大小设置
+        '--window-size=1920,1080',
     ]
 
-    browser = await playwright.chromium.launch( # <-- 切换到 chromium
-        headless=True,
+    browser = await playwright.chromium.launch(
+        headless=False, # <-- 2. 关键修改：以 "有头" 模式运行
         args=browser_args,
-        # 借鉴自 domains.py 的关键反检测设置：移除自动化标志
         ignore_default_args=[
             "--enable-automation",
             "--enable-blink-features=IdleDetection"
@@ -172,7 +153,6 @@ async def setup_browser_context(playwright):
     )
 
     context = await browser.new_context(
-        # 使用一个常见的 Chrome User-Agent
         user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36",
         viewport={"width": 1920, "height": 1080}
     )
@@ -180,32 +160,31 @@ async def setup_browser_context(playwright):
     return browser, context
 
 async def add_anti_detection_scripts(page):
-    """添加反检测脚本 (这些对于 Chromium 同样有效)"""
+    """添加反检测脚本 (stealth 库会处理大部分，我们保留这些作为补充)"""
     scripts = [
         "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})",
         "window.navigator.chrome = { runtime: {} };",
-        "Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});",
+        "Object.defineProperty(navigator, 'plugins', {get: ()K => [1, 2, 3, 4, 5]});",
         "Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});"
     ]
 
     for script in scripts:
         await page.add_init_script(script)
 
+# [ login, process_domain 函数保持不变 ]
+# ... (为节约篇幅，此处省略，请保留您原有的这两个函数)...
 async def login(page):
     """执行登录流程"""
     logger.info("正在导航到登录页面...")
     await page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=TIMEOUTS["page_load"])
 
-    # 模拟人类行为
     await simulate_human_behavior(page)
 
-    # 等待人机验证自动跳转
     logger.info("等待人机验证页(5秒盾)自动跳转到登录表单...")
     max_attempts = 3
 
     for attempt in range(max_attempts):
         try:
-            # 等待 180 秒，现在应该能成功等到 CF 跳转后的 email 输入框
             await page.wait_for_selector("input[name='email']", timeout=TIMEOUTS["login_wait"])
             logger.info("检测到登录表单，已进入账号密码输入页面。")
             break
@@ -227,7 +206,6 @@ async def login(page):
             await page.reload(wait_until="domcontentloaded", timeout=TIMEOUTS["page_load"])
             await asyncio.sleep(5)
 
-    # 填写表单并登录
     logger.info("正在填写登录信息...")
     await page.type("input[name='email']", DP_EMAIL, delay=random.randint(50, 150))
     await page.type("input[name='password']", DP_PASSWORD, delay=random.randint(50, 150))
@@ -236,7 +214,6 @@ async def login(page):
     async with page.expect_navigation(wait_until="networkidle", timeout=TIMEOUTS["navigation"]):
         await page.click("button[type='submit']")
 
-    # 确认登录成功
     if "/panel/main" not in page.url:
         logger.error(f"登录失败，当前URL为: {page.url}")
         await page.screenshot(path="login_failed_error.png")
@@ -252,49 +229,34 @@ async def login(page):
 async def process_domain(page, domain_name, domain_url_path, base_url):
     """处理单个域名的续期"""
     try:
-        # 构造并访问域名管理页面
         full_domain_url = base_url + domain_url_path
         logger.info(f"正在访问 {domain_name} 的管理页面: {full_domain_url}")
         await page.goto(full_domain_url, wait_until="networkidle", timeout=TIMEOUTS["navigation"])
 
-        # 查找续期链接
-        # 注意: 根据 domains.py，按钮可能是 Renew, 续期, 或 Prolong
-        # renew.py 原逻辑是找 a[href*='renewdomain']，这可能不准确
-        # 我们调整为查找按钮文本，如果找不到，再尝试原有的链接查找
-        
         renew_locator = page.locator("button:has-text('Renew'), button:has-text('续期'), button:has-text('Prolong'), a[href*='renewdomain']")
         
         if await renew_locator.count() > 0:
             logger.info("找到续期链接/按钮，开始续期流程...")
             renew_button_or_link = renew_locator.first
 
-            # 点击续期链接/按钮
             async with page.expect_navigation(wait_until="networkidle", timeout=TIMEOUTS["navigation"]):
                 await renew_button_or_link.click()
 
-            # --- 之后的逻辑基于 renew.py 原有流程 ---
-            # (domains.py 的逻辑更简单，只是点击“确认”，可能不适用于所有情况)
-            # (我们暂时保留 renew.py 的详细续期流程)
-
-            # 点击"Order Now"或"Continue"
             order_button = page.locator("button:has-text('Order Now'), button:has-text('Continue')").first
             if await order_button.count() > 0:
                 async with page.expect_navigation(wait_until="networkidle", timeout=TIMEOUTS["navigation"]):
                     await order_button.click()
 
-                # 同意条款
                 agree_checkbox = page.locator("input[name='accepttos']")
                 if await agree_checkbox.count() > 0:
                     await agree_checkbox.check()
 
-                # 完成结账
                 checkout_button = page.locator("button#checkout")
                 if await checkout_button.count() > 0:
                     async with page.expect_navigation(wait_until="networkidle", timeout=TIMEOUTS["navigation"]):
                         await checkout_button.click()
 
-                    # 检查订单确认
-                    await asyncio.sleep(2)  # 等待页面完全加载
+                    await asyncio.sleep(2)
                     page_content = await page.inner_text("body")
                     if "Order Confirmation" in page_content or "successfully" in page_content.lower():
                         logger.info(f"成功！域名 {domain_name} 续期订单已提交。")
@@ -322,12 +284,11 @@ async def process_domain(page, domain_name, domain_url_path, base_url):
         await page.screenshot(path=f"error_{domain_name}_exception.png")
         return False, error_msg
 
+
 async def run_renewal():
     """主执行函数，运行完整的登录和续期流程。"""
-    # 验证配置
     validate_config()
 
-    # 初始化变量
     browser = None
     page = None
     renewed_domains = []
@@ -335,26 +296,23 @@ async def run_renewal():
 
     async with async_playwright() as p:
         try:
-            # 步骤 1: 启动浏览器
-            logger.info("正在启动浏览器 (Chromium)...")
+            logger.info("正在启动浏览器 (Chromium, Headed 模式)...")
             browser, context = await setup_browser_context(p)
             page = await context.new_page()
 
-            # 添加反检测措施
+            logger.info("正在应用 playwright-stealth 补丁...")
+            await stealth_async(page) # <-- 3. 在页面创建后立刻应用 stealth 补丁
+
             await add_anti_detection_scripts(page)
 
-            # 步骤 2: 登录
             await login(page)
 
-            # 步骤 3: 导航到域名列表
             logger.info("\n正在导航到域名管理页面...")
             await page.goto(DOMAINS_URL, wait_until="networkidle", timeout=TIMEOUTS["navigation"])
 
-            # 等待域名列表加载
             await page.wait_for_selector("table.table-domains", timeout=TIMEOUTS["element_wait"])
             logger.info("已到达域名列表页面。")
 
-            # 获取所有域名行
             domain_rows = await page.locator("table.table-domains tbody tr").all()
             if not domain_rows:
                 logger.info("未找到任何域名。")
@@ -362,9 +320,7 @@ async def run_renewal():
                 logger.info(f"共找到 {len(domain_rows)} 个域名，开始逐一检查...")
                 base_url = "https://dash.domain.digitalplat.org/"
 
-                # 处理每个域名
                 for i, row in enumerate(domain_rows):
-                    # 从 onclick 属性中提取域名和状态
                     onclick_attr = await row.get_attribute("onclick")
                     if onclick_attr:
                         domain_url_path = onclick_attr.split("'")[1]
@@ -374,21 +330,17 @@ async def run_renewal():
                         status = status.strip()
                         logger.info(f"\n[{i+1}/{len(domain_rows)}] 检查域名: {domain_name} (状态: {status})")
 
-                        # 处理域名续期
                         success, error_msg = await process_domain(page, domain_name, domain_url_path, base_url)
                         if success:
                             renewed_domains.append(domain_name)
                         elif error_msg:
                             failed_domains.append(error_msg)
 
-                        # 返回域名列表页面以便处理下一个
                         logger.info("正在返回域名列表页面...")
                         await page.goto(DOMAINS_URL, wait_until="networkidle", timeout=TIMEOUTS["navigation"])
                     else:
                         logger.warning(f"第 {i+1} 行域名没有 onclick 属性，跳过。")
 
-
-            # 步骤 4: 发送最终执行结果通知
             logger.info("\n--- 所有域名检查完成 ---")
             if not renewed_domains and not failed_domains:
                 title = "DigitalPlat 续期检查完成"
@@ -402,20 +354,17 @@ async def run_renewal():
                     body += f"❌ 处理失败 {len(failed_domains)} 个域名:\n" + "\n".join(failed_domains)
             send_bark_notification(title, body.strip())
 
-            # 保存结果
             save_results(renewed_domains, failed_domains)
 
         except Exception as e:
-            # 步骤 5: 统一错误处理
             error_message = f"脚本执行时发生严重错误: {type(e).__name__} - {e}"
             logger.error(f"错误: {error_message}")
             if page:
                 await page.screenshot(path="fatal_error_screenshot.png")
                 logger.info("已保存截图 'fatal_error_screenshot.png' 以供调试。")
             send_bark_notification("DigitalPlat 脚本严重错误", f"{error_message}\n请检查 GitHub Actions 日志获取详情。")
-            sys.exit(1)  # 以错误码退出，让 Actions 知道任务失败了
+            sys.exit(1)
         finally:
-            # 步骤 6: 确保浏览器被关闭
             if browser and browser.is_connected():
                 logger.info("关闭浏览器...")
                 await browser.close()
