@@ -1,5 +1,5 @@
 # renew.py
-# GitHub Actions 优化版 - 使用官方 Playwright Action
+# GitHub Actions 优化版 - 使用系统 Chromium
 # 最后更新时间: 2025-01-XX
 
 import os
@@ -41,6 +41,7 @@ CONFIG = {
     "slow_mo": 1000,  # 增加操作延迟，避免被检测
     "timeout": 120000,
     "cf_timeout": 300,
+    "executablePath": "/usr/bin/chromium-browser",  # 系统 Chromium 路径
     "browser_args": [
         "--no-sandbox",
         "--disable-dev-shm-usage",
@@ -171,11 +172,12 @@ async def simulate_human_behavior(page):
     await asyncio.sleep(random.uniform(1, 3))
 
 async def setup_browser_context(playwright):
-    """设置浏览器上下文 - 为 GitHub Actions 优化"""
+    """设置浏览器上下文 - 使用系统 Chromium"""
     print_log("正在启动浏览器...", "info")
     
     browser = await playwright.chromium.launch(
         headless=CONFIG["headless"],
+        executable_path=CONFIG["executablePath"],  # 使用系统 Chromium
         args=CONFIG["browser_args"],
         slow_mo=CONFIG["slow_mo"],
         ignore_default_args=[
