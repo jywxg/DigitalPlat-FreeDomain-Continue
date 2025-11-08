@@ -18,20 +18,10 @@ jobs:
       with:
         python-version: '3.9'
         
-    - name: Cache pip packages
-      uses: actions/cache@v3
-      with:
-        path: |
-          ~/.cache/pip
-          ~/.local/lib/python3.9/site-packages
-        key: ${{ runner.os }}-pip-${{ hashFiles('**/renew.py') }}
-        restore-keys: |
-          ${{ runner.os }}-pip-
-          
     - name: Install system dependencies
       run: |
         sudo apt-get update
-        # 安装系统 Chromium（只需要第一次）
+        # 安装系统 Chromium
         sudo apt-get install -y chromium-browser
         # 安装必要的依赖库
         sudo apt-get install -y \
@@ -50,14 +40,10 @@ jobs:
         echo "=== Chromium 安装验证 ==="
         which chromium-browser
         chromium-browser --version
-        echo "=== 依赖库验证 ==="
-        ldconfig -p | grep -E "libnss3|libatk-bridge|libx11-xcb" || echo "部分库可能需要运行时加载"
         
     - name: Install Python dependencies
       run: |
         pip install playwright requests beautifulsoup4
-        # 验证 Playwright 安装
-        python -c "import playwright; print('Playwright 安装成功')"
         
     - name: Run renewal script
       env:
