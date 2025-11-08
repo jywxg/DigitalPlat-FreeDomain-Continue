@@ -1,5 +1,5 @@
 # renew.py
-# 最后更新时间: 2025-11-08 (已修正 __name__ == __main__ 语法错误)
+# 最后更新时间: 2025-11-08 (已移除 stealth，添加代理支持)
 # 这是一个集成了所有功能的完整版本脚本
 
 import os
@@ -11,7 +11,6 @@ import json
 import logging
 from datetime import datetime
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
-from playwright_stealth.stealth import stealth # <-- 1. 修正: 函数名叫 stealth
 
 # 配置日志
 logging.basicConfig(
@@ -25,6 +24,9 @@ DP_EMAIL = os.getenv("DP_EMAIL")
 DP_PASSWORD = os.getenv("DP_PASSWORD")
 BARK_KEY = os.getenv("BARK_KEY")
 BARK_SERVER = os.getenv("BARK_SERVER")
+# vvvvvvvvvvvv 新增代理配置 vvvvvvvvvvvv
+PROXY_URL = os.getenv("PROXY_URL") # 格式: http://user:pass@host:port 或 socks5://user:pass@host:port
+# ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 # --- 2. 网站固定 URL ---
 LOGIN_URL = "https://dash.domain.digitalplat.org/auth/login"
@@ -51,12 +53,14 @@ def validate_config():
         logger.error(error_msg)
         send_bark_notification("DigitalPlat 脚本配置错误", error_msg, level="timeSensitive")
         sys.exit(1)
+    
+    if PROXY_URL:
+        logger.info("检测到代理配置，将使用代理服务器。")
+    else:
+        logger.info("未检测到代理配置，将直接连接。")
 
 def send_bark_notification(title, body, level="active", badge=None):
-    """
-    发送 Bark 推送通知。
-    支持自建服务器地址。
-    """
+    """发送 Bark 推送通知"""
     if not BARK_KEY:
         logger.info("BARK_KEY 未设置，跳过发送通知。")
         return
@@ -122,8 +126,10 @@ async def simulate_human_behavior(page):
 async def setup_browser_context(playwright):
     """
     设置浏览器上下文
-    (使用 Headless=False)
+    (回到 Headless=True, 并添加代理)
     """
+    
+    # 借鉴自 domains.py 的成功启动参数
     browser_args = [
         '--no-sandbox',
         '--disable-dev-shm-usage',
@@ -138,9 +144,18 @@ async def setup_browser_context(playwright):
         '--window-size=1920,1080',
     ]
 
+    # vvvvvvvvvvvv 代理设置 vvvvvvvvvvvv
+    proxy_settings = None
+    if PROXY_URL:
+        proxy_settings = {
+            "server": PROXY_URL
+        }
+    # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
     browser = await playwright.chromium.launch(
-        headless=False, # <-- 关键修改：以 "有头" 模式运行
+        headless=True, # <-- 还原回 True
         args=browser_args,
+        proxy=proxy_settings, # <-- 应用代理
         ignore_default_args=[
             "--enable-automation",
             "--enable-blink-features=IdleDetection"
@@ -155,7 +170,7 @@ async def setup_browser_context(playwright):
     return browser, context
 
 async def add_anti_detection_scripts(page):
-    """添加反检测脚本 (stealth 库会处理大部分，我们保留这些作为补充)"""
+    """添加反检测脚本"""
     scripts = [
         "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})",
         "window.navigator.chrome = { runtime: {} };",
@@ -251,7 +266,7 @@ async def process_domain(page, domain_name, domain_url_path, base_url):
 
                     await asyncio.sleep(2)
                     page_content = await page.inner_text("body")
-                    if "Order Confirmation" in page.content or "successfully" in page_content.lower():
+                    if "Order Confirmation" in page_content or "successfully" in page_content.lower():
                         logger.info(f"成功！域名 {domain_name} 续期订单已提交。")
                         return True, None
                     else:
@@ -289,13 +304,11 @@ async def run_renewal():
 
     async with async_playwright() as p:
         try:
-            logger.info("正在启动浏览器 (Chromium, Headed 模式)...")
+            logger.info("正在启动浏览器 (Chromium, Headless 模式)...")
             browser, context = await setup_browser_context(p)
             page = await context.new_page()
 
-            logger.info("正在应用 playwright-stealth 补丁...")
-            await stealth(page) # <-- 2. 修正: 函数名叫 stealth
-
+            # (已移除 stealth)
             await add_anti_detection_scripts(page)
 
             await login(page)
@@ -355,14 +368,12 @@ async def run_renewal():
             if page:
                 await page.screenshot(path="fatal_error_screenshot.png")
                 logger.info("已保存截图 'fatal_error_screenshot.png' 以供调试。")
-            send_bark_notification("DigitalPlat 脚本严重错误", f"{error_message}\n请检查 GitHub Actions 日S志获取详情。")
+            send_bark_notification("DigitalPlat 脚本严重错误", f"{error_message}\n请检查 GitHub Actions 日志获取详情。")
             sys.exit(1)
         finally:
             if browser and browser.is_connected():
                 logger.info("关闭浏览器...")
                 await browser.close()
 
-# vvvvvvvvvvvv 这是唯一修改的行 vvvvvvvvvvvv
 if __name__ == "__main__":
-# ^^^^^^^^^^^^^^ 这是唯一修改的行 ^^^^^^^^^^^^^^
     asyncio.run(run_renewal())
