@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+# (已修正登录 URL)
+
 import asyncio
 import os
 import subprocess
@@ -128,14 +130,15 @@ async def init_browser():
         raise
 
 # ------------------------------------------
-# 以下所有代码 (do_login, renew_domains, main) 均来自您原始的 domains.py
-# 它们无需任何修改
+# 以下代码中仅修改了 do_login 的 URL
 # ------------------------------------------
 
 async def do_login(page):
     try:
         print_log("正在访问登录页面...")
-        await page.goto("https://dash.domain.digitalplat.org/login", timeout=CONFIG["timeout"])
+        # vvvvvvvvvvvv 这是唯一的、关键的修改 vvvvvvvvvvvv
+        await page.goto("https://dash.domain.digitalplat.org/auth/login", timeout=CONFIG["timeout"])
+        # ^^^^^^^^^^^^^^ 这是唯一的、关键的修改 ^^^^^^^^^^^^^^
         
         try:
             # GHA 关键等待：等待 CF 盾跳转后出现 email 输入框
