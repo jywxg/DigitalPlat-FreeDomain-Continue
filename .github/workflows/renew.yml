@@ -1,6 +1,65 @@
 name: DigitalPlat Domain Renew
 
+on:name: DigitalPlat Domain Renew
+
 on:
+  schedule:
+    - cron: '0 8 5,15,25 * *'  # 每月5、15、25日的8:00 UTC
+  workflow_dispatch:  # 手动触发
+
+jobs:
+  renew:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y wget curl
+        # 只安装最基础的依赖
+        sudo apt-get install -y libnss3 libatk-bridge2.0-0 libx11-xcb1
+        
+    - name: Install Python dependencies
+      run: |
+        pip install playwright requests beautifulsoup4
+        # 安装 Playwright 和浏览器
+        python -m playwright install chromium
+        # 如果网络有问题，使用国内镜像
+        # PLAYWRIGHT_DOWNLOAD_HOST=https://npmmirror.com/mirrors/playwright python -m playwright install chromium
+        
+    - name: Verify installation
+      run: |
+        python -c "import playwright; print('Playwright installed successfully')"
+        which chromium
+        chromium --version || echo "Chromium version check failed but continuing"
+        
+    - name: Run renewal script
+      env:
+        DP_EMAIL: ${{ secrets.DP_EMAIL }}
+        DP_PASSWORD: ${{ secrets.DP_PASSWORD }}
+        TG_TOKEN: ${{ secrets.TG_TOKEN }}
+        TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+      run: |
+        python renew.py
+        
+    - name: Upload results and logs
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: renewal-results
+        path: |
+          renewal_results.json
+          renewal.log
+          *.png
+        retention-days: 7
   schedule:
     - cron: '0 8 5,15,25 * *'  # 每月5、15、25日的8:00 UTC
   workflow_dispatch:  # 手动触发
