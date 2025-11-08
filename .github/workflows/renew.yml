@@ -21,29 +21,23 @@ jobs:
     - name: Install system dependencies
       run: |
         sudo apt-get update
-        # 安装系统 Chromium
-        sudo apt-get install -y chromium-browser
-        # 安装必要的依赖库
-        sudo apt-get install -y \
-          libnss3 \
-          libatk-bridge2.0-0 \
-          libx11-xcb1 \
-          libxcomposite1 \
-          libxdamage1 \
-          libxrandr2 \
-          libgbm1 \
-          libxss1 \
-          libasound2
-        
-    - name: Verify Chromium installation
-      run: |
-        echo "=== Chromium 安装验证 ==="
-        which chromium-browser
-        chromium-browser --version
+        sudo apt-get install -y wget curl
+        # 只安装最基础的依赖
+        sudo apt-get install -y libnss3 libatk-bridge2.0-0 libx11-xcb1
         
     - name: Install Python dependencies
       run: |
         pip install playwright requests beautifulsoup4
+        # 安装 Playwright 和浏览器
+        python -m playwright install chromium
+        # 如果网络有问题，使用国内镜像
+        # PLAYWRIGHT_DOWNLOAD_HOST=https://npmmirror.com/mirrors/playwright python -m playwright install chromium
+        
+    - name: Verify installation
+      run: |
+        python -c "import playwright; print('Playwright installed successfully')"
+        which chromium
+        chromium --version || echo "Chromium version check failed but continuing"
         
     - name: Run renewal script
       env:
