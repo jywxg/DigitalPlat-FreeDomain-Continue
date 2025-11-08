@@ -1,5 +1,5 @@
 # renew.py
-# 最后更新时间: 2025-11-08 (已修正 stealth 函数命名错误)
+# 最后更新时间: 2025-11-08 (已修正 __name__ == __main__ 语法错误)
 # 这是一个集成了所有功能的完整版本脚本
 
 import os
@@ -11,10 +11,7 @@ import json
 import logging
 from datetime import datetime
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
-
-# vvvvvvvvvvvv 这是修改的第一处 vvvvvvvvvvvv
 from playwright_stealth.stealth import stealth # <-- 1. 修正: 函数名叫 stealth
-# ^^^^^^^^^^^^^^ 这是修改的第一处 ^^^^^^^^^^^^^^
 
 # 配置日志
 logging.basicConfig(
@@ -254,7 +251,7 @@ async def process_domain(page, domain_name, domain_url_path, base_url):
 
                     await asyncio.sleep(2)
                     page_content = await page.inner_text("body")
-                    if "Order Confirmation" in page_content or "successfully" in page_content.lower():
+                    if "Order Confirmation" in page.content or "successfully" in page_content.lower():
                         logger.info(f"成功！域名 {domain_name} 续期订单已提交。")
                         return True, None
                     else:
@@ -297,9 +294,7 @@ async def run_renewal():
             page = await context.new_page()
 
             logger.info("正在应用 playwright-stealth 补丁...")
-            # vvvvvvvvvvvv 这是修改的第二处 vvvvvvvvvvvv
             await stealth(page) # <-- 2. 修正: 函数名叫 stealth
-            # ^^^^^^^^^^^^^^ 这是修改的第二处 ^^^^^^^^^^^^^^
 
             await add_anti_detection_scripts(page)
 
@@ -360,12 +355,14 @@ async def run_renewal():
             if page:
                 await page.screenshot(path="fatal_error_screenshot.png")
                 logger.info("已保存截图 'fatal_error_screenshot.png' 以供调试。")
-            send_bark_notification("DigitalPlat 脚本严重错误", f"{error_message}\n请检查 GitHub Actions 日志获取详情。")
+            send_bark_notification("DigitalPlat 脚本严重错误", f"{error_message}\n请检查 GitHub Actions 日S志获取详情。")
             sys.exit(1)
         finally:
             if browser and browser.is_connected():
                 logger.info("关闭浏览器...")
                 await browser.close()
 
-if __name__ == == "__main__":
+# vvvvvvvvvvvv 这是唯一修改的行 vvvvvvvvvvvv
+if __name__ == "__main__":
+# ^^^^^^^^^^^^^^ 这是唯一修改的行 ^^^^^^^^^^^^^^
     asyncio.run(run_renewal())
