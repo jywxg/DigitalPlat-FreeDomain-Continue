@@ -10,6 +10,7 @@ import random
 import json
 import logging
 import time
+import urllib.parse
 from datetime import datetime
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 
@@ -29,9 +30,9 @@ logger = logging.getLogger(__name__)
 DP_EMAIL = os.getenv("DP_EMAIL")
 DP_PASSWORD = os.getenv("DP_PASSWORD")
 
-# Bark 通知配置
-BARK_KEY = os.getenv("BARK_KEY")
-BARK_SERVER = os.getenv("BARK_SERVER")
+# Telegram 通知配置
+TG_TOKEN = os.getenv("TG_TOKEN")
+TG_CHAT_ID = os.getenv("TG_CHAT_ID")
 
 # --- 2. 配置参数 ---
 CONFIG = {
@@ -106,37 +107,32 @@ def validate_config():
     if missing:
         error_msg = f"错误：缺少必需的环境变量: {', '.join(missing)}。请在 GitHub Secrets 中配置。"
         print_log(error_msg, "error")
-        send_bark_notification("DigitalPlat 脚本配置错误", error_msg, level="timeSensitive")
+        send_telegram_notification("DigitalPlat 脚本配置错误", error_msg)
         sys.exit(1)
     
     print_log("环境变量验证通过", "info", True)
 
-def send_bark_notification(title, body, level="active", badge=None):
-    """发送 Bark 推送通知"""
-    if not BARK_KEY:
-        print_log("BARK_KEY 未设置，跳过发送通知", "debug")
+def send_telegram_notification(title, body):
+    """发送 Telegram 推送通知"""
+    if not TG_TOKEN or not TG_CHAT_ID:
+        print_log("TG_TOKEN 或 TG_CHAT_ID 未设置，跳过发送通知", "debug")
         return
 
-    server_url = BARK_SERVER if BARK_SERVER else "https://api.day.app"
-    api_url = f"{server_url.rstrip('/')}/{BARK_KEY}"
-
-    print_log(f"正在向 Bark 服务器发送通知: {title}", "debug")
-
     try:
-        payload = {
-            "title": title,
-            "body": body,
-            "group": "DigitalPlat Renew",
-            "level": level
+        message = f"*{title}*\n\n{body}"
+        
+        url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
+        params = {
+            "chat_id": TG_CHAT_ID,
+            "text": message,
+            "parse_mode": "Markdown"
         }
-        if badge is not None:
-            payload["badge"] = badge
-
-        response = requests.post(api_url, json=payload, timeout=15)
+        
+        response = requests.post(url, json=params, timeout=15)
         response.raise_for_status()
-        print_log("Bark 通知已成功发送", "info")
+        print_log("Telegram 通知已成功发送", "info")
     except Exception as e:
-        print_log(f"发送 Bark 通知时发生错误: {e}", "error")
+        print_log(f"发送 Telegram 通知时发生错误: {e}", "error")
 
 def save_results(renewed_domains, failed_domains, skipped_domains, errors):
     """保存处理结果到JSON文件"""
@@ -461,7 +457,7 @@ async def run_renewal():
             
             # 发送通知
             if errors:
-                message = f"⚠️ DigitalPlat 续期报告 ⚠️\n" \
+                message = f"⚠️ *DigitalPlat 续期报告* ⚠️\n" \
                          f"⏱️ 时间: {report_time}\n" \
                          f"🔄 尝试: {attempt}/{CONFIG['max_retries']}\n" \
                          f"✅ 成功: {len(renewed)}\n" \
@@ -469,7 +465,7 @@ async def run_renewal():
                          f"❌ 失败: {len(failed)}\n\n" \
                          f"最后错误: {errors[-1][:200] if errors else '无'}"
             else:
-                message = f"✅ DigitalPlat 续期成功 ✅\n" \
+                message = f"✅ *DigitalPlat 续期成功* ✅\n" \
                          f"⏱️ 时间: {report_time}\n" \
                          f"🔄 尝试次数: {attempt}\n" \
                          f"✔️ 成功: {len(renewed)}个\n" \
@@ -480,7 +476,7 @@ async def run_renewal():
                     if len(renewed) > 5:
                         message += f"\n...等 {len(renewed)} 个域名"
             
-            send_bark_notification("DigitalPlat 续期完成", message)
+            send_telegram_notification("DigitalPlat 续期完成", message)
             save_results(renewed, failed, skipped, errors)
             
             print_log(f"📊 续期完成 - 成功: {len(renewed)}, 跳过: {len(skipped)}, 失败: {len(failed)}", "info", True)
@@ -489,10 +485,9 @@ async def run_renewal():
         except Exception as e:
             print_log(f"尝试 #{attempt} 失败: {str(e)}", "error")
             if attempt == CONFIG["max_retries"]:
-                send_bark_notification(
+                send_telegram_notification(
                     "❌ DigitalPlat 续期彻底失败",
-                    f"已重试 {CONFIG['max_retries']} 次\n最后错误: {str(e)}\n请立即手动检查!",
-                    level="timeSensitive"
+                    f"已重试 {CONFIG['max_retries']} 次\n最后错误: {str(e)}\n请立即手动检查!"
                 )
             await asyncio.sleep(30)
         finally:
@@ -511,6 +506,6 @@ if __name__ == "__main__":
         print_log("收到终止信号，脚本停止", "info", True)
     except Exception as e:
         print_log(f"脚本执行异常: {str(e)}", "error")
-        send_bark_notification("🔥 续期脚本执行异常", f"错误: {str(e)}")
+        send_telegram_notification("🔥 续期脚本执行异常", f"错误: {str(e)}")
     finally:
         print_log("脚本执行结束", "info", True)
