@@ -31,8 +31,8 @@ jobs:
       env:
         DP_EMAIL: ${{ secrets.DP_EMAIL }}
         DP_PASSWORD: ${{ secrets.DP_PASSWORD }}
-        BARK_KEY: ${{ secrets.BARK_KEY }}
-        BARK_SERVER: ${{ secrets.BARK_SERVER }}
+        TG_TOKEN: ${{ secrets.TG_TOKEN }}
+        TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
       run: |
         python renew.py
         
