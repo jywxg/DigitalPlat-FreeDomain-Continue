@@ -1,48 +1,48 @@
-name: Domain Renewal
+name: DigitalPlat Domain Renew
+
 on:
   schedule:
-    - cron: '0 0 1 1,4,7,10 *'  # 每 3 个月运运行一次
-  workflow_dispatch:  # 允许手动触发
+    - cron: '0 8 5,15,25 * *'  # 每月5、15、25日的8:00 UTC
+  workflow_dispatch:  # 手动触发
+
 jobs:
   renew:
     runs-on: ubuntu-latest
+    
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'  # 使用稳定的 Python 版本
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libnss3 libatk1.0-0 libatk-bridge2.0-0 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2t64
-
-      - name: Clear Playwright cache
-        run: |
-          rm -rf /home/runner/.cache/ms-playwright
-
-      - name: Install Python dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install --upgrade playwright requests
-
-      - name: Install Playwright browsers
-        run: |
-          python -m playwright install firefox
-          python -m playwright install-deps firefox
-
-      - name: Verify Playwright installation
-        run: |
-          python -m playwright --version
-          ls -la /home/runner/.cache/ms-playwright/firefox-*
-
-      - name: Run renew script
-        run: python renew.py
-        env:
-          DP_EMAIL: ${{ secrets.DP_EMAIL }}
-          DP_PASSWORD: ${{ secrets.DP_PASSWORD }}
-          BARK_KEY: ${{ secrets.BARK_KEY }}
-          BARK_SERVER: ${{ secrets.BARK_SERVER }}
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y chromium-browser
+        sudo apt-get install -y libnss3 libatk-bridge2.0-0 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxrandr2 libgbm1 libxss1 libasound2 libpangocairo-1.0-0
+        
+    - name: Install Python dependencies
+      run: |
+        pip install playwright requests
+        python -m playwright install chromium
+        
+    - name: Run renewal script
+      env:
+        DP_EMAIL: ${{ secrets.DP_EMAIL }}
+        DP_PASSWORD: ${{ secrets.DP_PASSWORD }}
+        BARK_KEY: ${{ secrets.BARK_KEY }}
+        BARK_SERVER: ${{ secrets.BARK_SERVER }}
+      run: |
+        python renew.py
+        
+    - name: Upload results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: renewal-results
+        path: |
+          renewal_results.json
+          *.png
