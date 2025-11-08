@@ -1,5 +1,5 @@
 # renew.py
-# 基于成功经验优化的版本
+# 增强版 - 解决 CloudFlare 验证问题
 
 import os
 import sys
@@ -24,35 +24,52 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# --- 1. 从环境变量中读取配置 ---
+# --- 配置参数 ---
 DP_EMAIL = os.getenv("DP_EMAIL")
 DP_PASSWORD = os.getenv("DP_PASSWORD")
 TG_TOKEN = os.getenv("TG_TOKEN")
 TG_CHAT_ID = os.getenv("TG_CHAT_ID")
 
-# --- 2. 配置参数 - 使用成功脚本的参数 ---
 CONFIG = {
-    "max_retries": 3,
+    "max_retries": 5,  # 增加重试次数
     "headless": True,
-    "slow_mo": 500,    # 使用成功脚本的延迟
-    "timeout": 120000, # 使用成功脚本的超时
-    "executablePath": "/usr/bin/chromium-browser",
-    "browser_args": [   # 使用成功脚本的参数
+    "slow_mo": 2000,   # 增加延迟，更像人类
+    "timeout": 180000,
+    "browser_args": [
         "--no-sandbox",
         "--disable-dev-shm-usage",
         "--disable-gpu",
-        "--single-process",
-        "--no-zygote",
-        "--disable-setuid-sandbox",
+        "--disable-blink-features=AutomationControlled",
+        "--disable-features=VizDisplayCompositor",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-default-apps",
+        "--disable-popup-blocking",
+        "--disable-translate",
+        "--disable-background-timer-throttling",
+        "--disable-renderer-backgrounding",
+        "--disable-backgrounding-occluded-windows",
+        "--disable-client-side-phishing-detection",
+        "--disable-crash-reporter",
+        "--disable-ipc-flooding-protection",
+        "--disable-hang-monitor",
+        "--disable-extensions",
+        "--disable-plugins",
+        "--disable-sync",
+        "--disable-web-resources",
+        "--disable-logging",
         "--disable-software-rasterizer",
         "--disable-features=site-per-process",
         "--disable-breakpad",
-        "--disable-client-side-phishing-detection"
+        "--ignore-certificate-errors",
+        "--metrics-recording-only",
+        "--mute-audio",
+        "--no-zygote",
+        "--window-size=1920,1080"
     ]
 }
 
-# --- 3. 使用成功的URL ---
-LOGIN_URL = "https://dash.domain.digitalplat.org/login"  # 关键：使用成功的URL
+LOGIN_URL = "https://dash.domain.digitalplat.org/login"
 DOMAINS_URL = "https://dash.domain.digitalplat.org/panel/main?page=%2Fpanel%2Fdomains"
 
 class Color:
@@ -66,7 +83,6 @@ class Color:
     BOLD = '\033[1m'
 
 def print_log(message, level="info", important=False):
-    """彩色日志输出"""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     if level == "error":
         color = Color.RED
@@ -89,7 +105,6 @@ def print_log(message, level="info", important=False):
     logger.info(f"{prefix}: {message}")
 
 def validate_config():
-    """验证必需的环境变量是否已设置"""
     required_vars = {
         "DP_EMAIL": DP_EMAIL,
         "DP_PASSWORD": DP_PASSWORD
@@ -105,7 +120,6 @@ def validate_config():
     print_log("环境变量验证通过", "info", True)
 
 def send_telegram_notification(title, body):
-    """发送 Telegram 推送通知"""
     if not TG_TOKEN or not TG_CHAT_ID:
         print_log("TG_TOKEN 或 TG_CHAT_ID 未设置，跳过发送通知", "debug")
         return
@@ -127,64 +141,214 @@ def send_telegram_notification(title, body):
         print_log(f"发送 Telegram 通知时发生错误: {e}", "error")
 
 async def setup_browser_context(playwright):
-    """设置浏览器上下文 - 使用成功脚本的方法"""
+    """设置浏览器上下文 - 增强反检测"""
     print_log("正在启动浏览器...", "info")
+    
+    # 更真实的用户代理列表
+    user_agents = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0"
+    ]
     
     browser = await playwright.chromium.launch(
         headless=CONFIG["headless"],
-        executable_path=CONFIG["executablePath"],
         args=CONFIG["browser_args"],
         slow_mo=CONFIG["slow_mo"],
         ignore_default_args=[
             "--enable-automation",
-            "--enable-blink-features=IdleDetection"
+            "--enable-blink-features=IdleDetection",
+            "--disable-background-timer-throttling",
+            "--disable-backgrounding-occluded-windows",
+            "--disable-renderer-backgrounding"
         ]
     )
 
     context = await browser.new_context(
-        viewport={"width": 1280, "height": 720},
-        user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36",
-        ignore_https_errors=True
+        viewport={"width": 1920, "height": 1080},
+        user_agent=random.choice(user_agents),
+        ignore_https_errors=True,
+        extra_http_headers={
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+            "Accept-Language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
+            "Sec-Ch-Ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+            "Sec-Ch-Ua-Mobile": "?0",
+            "Sec-Ch-Ua-Platform": '"Windows"',
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none",
+            "Upgrade-Insecure-Requests": "1"
+        }
     )
 
     print_log("浏览器启动成功", "info", True)
     return browser, context
 
-async def login(page):
-    """登录流程 - 完全复制成功脚本的方法"""
-    try:
-        print_log("正在访问登录页面...", "info")
-        await page.goto(LOGIN_URL, timeout=CONFIG["timeout"])
+async def add_anti_detection_scripts(page):
+    """增强反检测脚本"""
+    print_log("正在注入反检测脚本...", "debug")
+    
+    scripts = [
+        # 隐藏webdriver属性
+        "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})",
         
-        # 处理可能的验证 - 关键：直接复制成功的方法
-        try:
-            await page.wait_for_selector('input[name="email"]', timeout=60000)
-        except Exception as e:
-            if await page.query_selector('div#challenge-form'):
-                print_log("可能需要人工验证，尝试自动处理...", "warning")
-                await asyncio.sleep(10)
-                if await page.query_selector('div#challenge-form'):
-                    raise Exception("检测到需要人工验证")
+        # 覆盖plugins和languages
+        "Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});",
+        "Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en', 'zh-CN', 'zh']});",
+        
+        # 覆盖Chrome运行时
+        "window.chrome = {runtime: {}, loadTimes: function(){}, csi: function(){}, app: {}};",
+        
+        # 覆盖权限
+        "const originalQuery = window.navigator.permissions.query;",
+        "window.navigator.permissions.query = (parameters) => (",
+        "    parameters.name === 'notifications' ?",
+        "        Promise.resolve({ state: Notification.permission }) :",
+        "        originalQuery(parameters)",
+        ");",
+        
+        # 覆盖硬件信息
+        "Object.defineProperty(navigator, 'hardwareConcurrency', {get: () => 8});",
+        "Object.defineProperty(navigator, 'deviceMemory', {get: () => 8});",
+        
+        # WebGL指纹覆盖
+        "const getParameter = WebGLRenderingContext.getParameter;",
+        "WebGLRenderingContext.prototype.getParameter = function(parameter) {",
+        "    if (parameter === 37445) { return 'Intel Open Source Technology Center'; }",
+        "    if (parameter === 37446) { return 'Mesa DRI Intel(R) HD Graphics'; }",
+        "    return getParameter(parameter);",
+        "};",
+        
+        # 删除自动化痕迹
+        "delete window.cdc_adoQpoasnfa76pfcZLmcfl_Array;",
+        "delete window.cdc_adoQpoasnfa76pfcZLmcfl_Promise;",
+        "delete window.cdc_adoQpoasnfa76pfcZLmcfl_Symbol;",
+        "delete window.cdc_adoQpoasnfa76pfcZLmcfl_Object;",
+        "delete window.cdc_adoQpoasnfa76pfcZLmcfl_Proxy;",
+        
+        # 覆盖WebDriver属性
+        "if (window.navigator.chrome) {",
+        "    Object.defineProperty(navigator, 'chrome', {",
+        "        get: () => undefined,",
+        "    });",
+        "}"
+    ]
 
-        print_log("正在填写登录表单...", "info")
-        await page.fill('input[name="email"]', DP_EMAIL)
-        await page.fill('input[name="password"]', DP_PASSWORD)
-        await page.click('button[type="submit"]')
-        
+    for script in scripts:
         try:
-            await page.wait_for_url("**/panel/main**", timeout=60000)
-            print_log("登录成功", "info", True)
-            return True
+            await page.add_init_script(script)
         except Exception as e:
-            print_log(f"登录状态验证失败: {str(e)}", "error")
-            return False
+            print_log(f"注入脚本时出错: {e}", "debug")
+    
+    print_log("反检测脚本注入完成", "debug")
+
+async def handle_cloudflare(page):
+    """处理CloudFlare验证 - 增强版"""
+    print_log("正在处理CloudFlare验证...", "info")
+    
+    max_wait = 180  # 最大等待3分钟
+    start_time = time.time()
+    
+    while time.time() - start_time < max_wait:
+        current_url = page.url
+        page_content = await page.content()
+        
+        # 检查是否在CloudFlare挑战页面
+        if any(indicator in current_url.lower() or indicator in page_content.lower() 
+               for indicator in ['challenge', 'cf-', 'ray_id', 'ddos', 'just a moment']):
             
-    except Exception as e:
-        print_log(f"登录流程异常: {str(e)}", "error")
-        return False
+            print_log("检测到CloudFlare挑战页面，等待验证...", "warning")
+            
+            # 模拟人类行为：随机移动鼠标和滚动
+            viewport = page.viewport_size
+            if viewport:
+                await page.mouse.move(
+                    random.randint(100, viewport["width"] - 100),
+                    random.randint(100, viewport["height"] - 100)
+                )
+                await page.mouse.wheel(0, random.randint(100, 300))
+            
+            await asyncio.sleep(5)
+            
+        # 检查是否通过验证
+        elif any(indicator in current_url.lower() 
+                for indicator in ['login', 'auth', 'signin']):
+            print_log("✅ CloudFlare验证通过", "info", True)
+            return True
+            
+        # 检查是否直接进入面板
+        elif 'panel' in current_url or 'dashboard' in current_url:
+            print_log("✅ 已直接进入面板", "info", True)
+            return True
+            
+        else:
+            print_log(f"当前页面: {current_url}", "debug")
+            await asyncio.sleep(3)
+    
+    print_log("❌ CloudFlare验证超时", "error")
+    return False
+
+async def login(page):
+    """登录流程 - 增强版"""
+    for attempt in range(CONFIG["max_retries"]):
+        try:
+            print_log(f"登录尝试 {attempt + 1}/{CONFIG['max_retries']}", "info", True)
+            
+            # 访问登录页面
+            print_log("正在访问登录页面...", "info")
+            await page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=CONFIG["timeout"])
+            
+            # 处理CloudFlare验证
+            if not await handle_cloudflare(page):
+                if attempt == CONFIG["max_retries"] - 1:
+                    raise Exception("CloudFlare验证失败")
+                print_log("CloudFlare验证失败，准备重试...", "warning")
+                continue
+            
+            # 等待登录表单
+            print_log("等待登录表单加载...", "info")
+            try:
+                await page.wait_for_selector('input[name="email"]', timeout=60000)
+            except Exception as e:
+                if await page.query_selector('div#challenge-form'):
+                    print_log("可能需要人工验证，尝试自动处理...", "warning")
+                    await asyncio.sleep(10)
+                    if await page.query_selector('div#challenge-form'):
+                        raise Exception("检测到需要人工验证")
+                raise e
+
+            print_log("正在填写登录表单...", "info")
+            await page.fill('input[name="email"]', DP_EMAIL)
+            await asyncio.sleep(random.uniform(1, 2))
+            await page.fill('input[name="password"]', DP_PASSWORD)
+            await asyncio.sleep(random.uniform(1, 2))
+            await page.click('button[type="submit"]')
+            
+            try:
+                await page.wait_for_url("**/panel/main**", timeout=60000)
+                print_log("登录成功", "info", True)
+                return True
+            except Exception as e:
+                print_log(f"登录状态验证失败: {str(e)}", "error")
+                return False
+                
+        except Exception as e:
+            print_log(f"登录流程异常: {str(e)}", "error")
+            if attempt == CONFIG["max_retries"] - 1:
+                raise
+            await asyncio.sleep(10)
+    
+    return False
+
+# renew_domains 和 run_renewal 函数保持不变
+# [保持你之前成功的 renew_domains 和 run_renewal 函数]
 
 async def renew_domains(page):
-    """续期域名 - 使用成功脚本的方法"""
+    """续期域名"""
     renewed_domains = []
     failed_domains = []
     skipped_domains = []
@@ -263,6 +427,9 @@ async def run_renewal():
             playwright = await async_playwright().start()
             browser, context = await setup_browser_context(playwright)
             page = await context.new_page()
+            
+            # 添加反检测
+            await add_anti_detection_scripts(page)
             
             # 登录
             if not await login(page):
