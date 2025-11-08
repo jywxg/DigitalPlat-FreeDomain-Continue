@@ -18,16 +18,14 @@ jobs:
       with:
         python-version: '3.9'
         
-    - name: Install system dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y chromium-browser
-        sudo apt-get install -y libnss3 libatk-bridge2.0-0 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxrandr2 libgbm1 libxss1 libasound2 libpangocairo-1.0-0
+    - name: Install Playwright with Built-in Browser
+      uses: microsoft/playwright-github-action@v1
+      with:
+        browsers: chromium
         
     - name: Install Python dependencies
       run: |
-        pip install playwright requests
-        python -m playwright install chromium
+        pip install requests beautifulsoup4
         
     - name: Run renewal script
       env:
@@ -38,11 +36,13 @@ jobs:
       run: |
         python renew.py
         
-    - name: Upload results
+    - name: Upload results and logs
       if: always()
       uses: actions/upload-artifact@v4
       with:
         name: renewal-results
         path: |
           renewal_results.json
+          renewal.log
           *.png
+        retention-days: 7
