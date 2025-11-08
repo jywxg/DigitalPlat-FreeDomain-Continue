@@ -1,5 +1,5 @@
 # renew.py
-# 最后更新时间: 2025-11-08 (已集成 playwright-stealth 和 Headless=False 策略)
+# 最后更新时间: 2025-11-08 (已修正 stealth 函数命名错误)
 # 这是一个集成了所有功能的完整版本脚本
 
 import os
@@ -11,7 +11,10 @@ import json
 import logging
 from datetime import datetime
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
-from playwright_stealth.stealth import stealth_async # <-- 1. 修正: 从 .stealth 模块中引入
+
+# vvvvvvvvvvvv 这是修改的第一处 vvvvvvvvvvvv
+from playwright_stealth.stealth import stealth # <-- 1. 修正: 函数名叫 stealth
+# ^^^^^^^^^^^^^^ 这是修改的第一处 ^^^^^^^^^^^^^^
 
 # 配置日志
 logging.basicConfig(
@@ -38,11 +41,6 @@ TIMEOUTS = {
     "login_wait": 180000
 }
 
-# [ send_bark_notification, save_results, retry_operation, simulate_human_behavior, add_anti_detection_scripts 函数保持不变 ]
-# ... (为节约篇幅，此处省略，请保留您原有的这几个函数)...
-#
-# 注意：为确保代码完整，我将把所有函数复制过来
-#
 def validate_config():
     """验证必需的环境变量是否已设置"""
     required_vars = {
@@ -127,7 +125,7 @@ async def simulate_human_behavior(page):
 async def setup_browser_context(playwright):
     """
     设置浏览器上下文
-    (已修改为使用 Headless=False)
+    (使用 Headless=False)
     """
     browser_args = [
         '--no-sandbox',
@@ -144,7 +142,7 @@ async def setup_browser_context(playwright):
     ]
 
     browser = await playwright.chromium.launch(
-        headless=False, # <-- 2. 关键修改：以 "有头" 模式运行
+        headless=False, # <-- 关键修改：以 "有头" 模式运行
         args=browser_args,
         ignore_default_args=[
             "--enable-automation",
@@ -164,15 +162,13 @@ async def add_anti_detection_scripts(page):
     scripts = [
         "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})",
         "window.navigator.chrome = { runtime: {} };",
-        "Object.defineProperty(navigator, 'plugins', {get: ()K => [1, 2, 3, 4, 5]});",
+        "Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});",
         "Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});"
     ]
 
     for script in scripts:
         await page.add_init_script(script)
 
-# [ login, process_domain 函数保持不变 ]
-# ... (为节约篇幅，此处省略，请保留您原有的这两个函数)...
 async def login(page):
     """执行登录流程"""
     logger.info("正在导航到登录页面...")
@@ -301,7 +297,9 @@ async def run_renewal():
             page = await context.new_page()
 
             logger.info("正在应用 playwright-stealth 补丁...")
-            await stealth_async(page) # <-- 3. 在页面创建后立刻应用 stealth 补丁
+            # vvvvvvvvvvvv 这是修改的第二处 vvvvvvvvvvvv
+            await stealth(page) # <-- 2. 修正: 函数名叫 stealth
+            # ^^^^^^^^^^^^^^ 这是修改的第二处 ^^^^^^^^^^^^^^
 
             await add_anti_detection_scripts(page)
 
@@ -369,5 +367,5 @@ async def run_renewal():
                 logger.info("关闭浏览器...")
                 await browser.close()
 
-if __name__ == "__main__":
+if __name__ == == "__main__":
     asyncio.run(run_renewal())
