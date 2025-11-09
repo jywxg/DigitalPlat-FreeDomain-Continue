@@ -1,5 +1,6 @@
 # .github/workflows/renew.yml
 # 运行 GHA 移植版 domains.py 的工作流
+# (已启用 Xvfb 以支持 Headless=False)
 
 name: DigitalPlat 域名自动续期 (domains.py)
 
@@ -26,12 +27,19 @@ jobs:
           python -m pip install --upgrade pip
           pip install playwright # 只需要 playwright
 
+      # vvvvvvvvvvvv 关键修改 vvvvvvvvvvvv
+      - name: 安装 Xvfb (虚拟显示服务)
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+      # ^^^^^^^^^^^^^^ 关键修改 ^^^^^^^^^^^^^^
+
       - name: 安装 Playwright Chromium 浏览器
         run: playwright install chromium
 
-      - name: 运行域名续期脚本
+      - name: 运行域名续期脚本 (在虚拟显示中)
         # 确保这里的 python domains.py 和您的文件名一致
-        run: python domains.py 
+        # vvvvvvvvvvvv 关键修改 vvvvvvvvvvvv
+        run: xvfb-run python domains.py 
+        # ^^^^^^^^^^^^^^ 关键修改 ^^^^^^^^^^^^^^
         env:
           # 注入所有 Secrets
           DP_EMAIL: ${{ secrets.DP_EMAIL }}
