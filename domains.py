@@ -1,368 +1,349 @@
-# renew.py
-# 最后更新时间: 2025-11-08 (已修正 stealth import 错误)
-# 这是一个集成了所有功能的完整版本脚本
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 
-import os
-import sys
+# (已修正登录 URL)
+# (已修正 do_login 逻辑以等待元素可见)
+# (已修正 print_log 中的 Color.END 拼写错误)
+# (已修正 do_login 的交互顺序)
+# (最终 Boss 修正: 启用 Headless=False 并更新 User-Agent)
+# (最终逻辑修正: 不再等待 Password 可见, 直接键入)
+
 import asyncio
-import requests
+import os
+import subprocess
+import urllib.parse
+import time
 import random
-import json
-import logging
 from datetime import datetime
-from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
-# vvvvvvvvvvvv 这是唯一修改的行 vvvvvvvvvvvv
-from playwright_stealth.stealth import stealth_async # <-- 1. 修正: 从 .stealth 模块中引入
-# ^^^^^^^^^^^^^^ 这是唯一修改的行 ^^^^^^^^^^^^^^
 
-# 配置日志
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
-
-# --- 1. 从环境变量中读取配置 ---
-DP_EMAIL = os.getenv("DP_EMAIL")
-DP_PASSWORD = os.getenv("DP_PASSWORD")
-BARK_KEY = os.getenv("BARK_KEY")
-BARK_SERVER = os.getenv("BARK_SERVER")
-
-# --- 2. 网站固定 URL ---
-LOGIN_URL = "https://dash.domain.digitalplat.org/auth/login"
-DOMAINS_URL = "https://dash.domain.digitalplat.org/panel/main?page=%2Fpanel%2Fdomains"
-
-# --- 3. 超时配置 ---
-TIMEOUTS = {
-    "page_load": 60000,
-    "element_wait": 30000,
-    "navigation": 60000,
-    "login_wait": 180000
+# --- GHA 移植修改 1: 从环境变量读取配置 ---
+CONFIG = {
+    "email": os.getenv("DP_EMAIL"),
+    "password": os.getenv("DP_PASSWORD"),
+    "tg_token": os.getenv("TG_TOKEN"),
+    "tg_chat_id": os.getenv("TG_CHAT_ID"),
+    "max_retries": 3,
+    "headless": True,  # (这个值不再被使用, 我们将硬编码 Headless=False)
+    "slow_mo": 500,    
+    "timeout": 120000,  
+    "cf_timeout": 300,  
+    "executablePath": None, # <-- GHA 关键修改: 设为 None, 使用 GHA 自动下载的浏览器
+    "browser_args": [   # 保留所有成功的反检测参数
+        "--no-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
+        "--single-process",
+        "--no-zygote",
+        "--disable-setuid-sandbox",
+        "--disable-software-rasterizer",
+        "--disable-features=site-per-process",
+        "--disable-breakpad",
+        "--disable-client-side-phishing-detection"
+    ]
 }
 
-def validate_config():
-    """验证必需的环境变量是否已设置"""
-    required_vars = {
-        "DP_EMAIL": DP_EMAIL,
-        "DP_PASSWORD": DP_PASSWORD
-    }
+# --- GHA 移植修改 2: 从环境变量读取代理 ---
+PROXY_URL = os.getenv("PROXY_URL") # 格式: http://... 或 socks5://...
 
-    missing = [var for var, value in required_vars.items() if not value]
-    if missing:
-        error_msg = f"错误：缺少必需的环境变量: {', '.join(missing)}。请在 GitHub Secrets 中配置。"
-        logger.error(error_msg)
-        send_bark_notification("DigitalPlat 脚本配置错误", error_msg, level="timeSensitive")
-        sys.exit(1)
+# ------------------------------------------
+# ... (Color, print_log, tg_send 函数保持不变) ...
+# ------------------------------------------
 
-def send_bark_notification(title, body, level="active", badge=None):
-    """
-    发送 Bark 推送通知。
-    支持自建服务器地址。
-    """
-    if not BARK_KEY:
-        logger.info("BARK_KEY 未设置，跳过发送通知。")
+class Color:
+    GREEN = '\033[92m'
+    YELLOW = '\033[93m'
+    RED = '\033[91m'
+    BLUE = '\033[94m'
+    CYAN = '\033[96m'
+    WHITE = '\033[97m'
+    END = '\033[0m'
+    BOLD = '\033[1m'
+
+def print_log(message, level="info", important=False):
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if level == "error":
+        color = Color.RED
+        prefix = "❌ ERROR"
+    elif level == "warning":
+        color = Color.YELLOW
+        prefix = "⚠️ WARN"
+    elif level == "debug":
+        color = Color.CYAN
+        prefix = "🐛 DEBUG"
+    else:
+        color = Color.GREEN
+        prefix = "ℹ️ INFO"
+    if important:
+        color = Color.BOLD + color
+    print(f"{Color.WHITE}[{timestamp}]{Color.END} {color}{prefix}:{Color.END} {message}")
+
+
+async def tg_send(text):
+    if not CONFIG["tg_token"] or not CONFIG["tg_chat_id"]:
+        print_log("TG_TOKEN 或 TG_CHAT_ID 未设置，跳过发送通知。", "warning")
         return
-
-    server_url = BARK_SERVER if BARK_SERVER else "https://api.day.app"
-    api_url = f"{server_url.rstrip('/')}/{BARK_KEY}"
-    logger.info(f"正在向 Bark 服务器 {server_url} 发送通知: {title}")
-
     try:
-        payload = {
-            "title": title,
-            "body": body,
-            "group": "DigitalPlat Renew",
-            "level": level
-        }
-        if badge is not None:
-            payload["badge"] = badge
-
-        response = requests.post(api_url, json=payload, timeout=10)
-        response.raise_for_status()
-        logger.info("Bark 通知已成功发送。")
-    except requests.exceptions.RequestException as e:
-        logger.error(f"发送 Bark 通知时发生网络错误: {e}")
+        print_log(f"发送TG通知: {text[:100]}...", "debug")
+        result = subprocess.run([
+            "curl", "-s", "-X", "POST",
+            f"https://api.telegram.org/bot{CONFIG['tg_token']}/sendMessage",
+            "-d", f"chat_id={CONFIG['tg_chat_id']}",
+            "-d", f"text={urllib.parse.quote(text)}",
+            "-d", "parse_mode=Markdown"
+        ], capture_output=True, text=True, timeout=20)
+        if result.returncode != 0:
+            print_log(f"TG通知失败: {result.stderr}", "error")
     except Exception as e:
-        logger.error(f"发送 Bark 通知时发生未知错误: {e}")
+        print_log(f"TG通知异常: {str(e)}", "error")
 
-def save_results(renewed_domains, failed_domains):
-    """保存处理结果到JSON文件"""
-    results = {
-        "timestamp": datetime.now().isoformat(),
-        "renewed_count": len(renewed_domains),
-        "failed_count": len(failed_domains),
-        "renewed_domains": renewed_domains,
-        "failed_domains": failed_domains
-    }
 
+# --- GHA 移植修改 3: 在 init_browser 中应用代理 ---
+async def init_browser():
+    from playwright.async_api import async_playwright
     try:
-        with open("renewal_results.json", "w", encoding="utf-8") as f:
-            json.dump(results, f, indent=2, ensure_ascii=False)
-        logger.info("处理结果已保存到 renewal_results.json")
-    except Exception as e:
-        logger.error(f"保存结果时发生错误: {e}")
-
-async def retry_operation(operation, max_retries=3, delay=2):
-    """重试操作的通用函数"""
-    for attempt in range(max_retries):
-        try:
-            return await operation()
-        except Exception as e:
-            if attempt == max_retries - 1:
-                raise
-            logger.warning(f"操作失败，{delay}秒后重试... (尝试 {attempt + 1}/{max_retries})")
-            await asyncio.sleep(delay)
-
-async def simulate_human_behavior(page):
-    """模拟人类行为"""
-    await page.mouse.move(
-        random.randint(100, 500),
-        random.randint(100, 500)
-    )
-    await asyncio.sleep(random.uniform(0.5, 2))
-
-async def setup_browser_context(playwright):
-    """
-    设置浏览器上下文
-    (使用 Headless=False)
-    """
-    browser_args = [
-        '--no-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-        '--single-process',
-        '--no-zygote',
-        '--disable-setuid-sandbox',
-        '--disable-software-rasterizer',
-        '--disable-features=site-per-process',
-        '--disable-breakpad',
-        '--disable-client-side-phishing-detection',
-        '--window-size=1920,1080',
-    ]
-
-    browser = await playwright.chromium.launch(
-        headless=False, # <-- 关键修改：以 "有头" 模式运行
-        args=browser_args,
-        ignore_default_args=[
-            "--enable-automation",
-            "--enable-blink-features=IdleDetection"
-        ]
-    )
-
-    context = await browser.new_context(
-        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36",
-        viewport={"width": 1920, "height": 1080}
-    )
-
-    return browser, context
-
-async def add_anti_detection_scripts(page):
-    """添加反检测脚本 (stealth 库会处理大部分，我们保留这些作为补充)"""
-    scripts = [
-        "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})",
-        "window.navigator.chrome = { runtime: {} };",
-        "Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});",
-        "Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});"
-    ]
-
-    for script in scripts:
-        await page.add_init_script(script)
-
-async def login(page):
-    """执行登录流程"""
-    logger.info("正在导航到登录页面...")
-    await page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=TIMEOUTS["page_load"])
-
-    await simulate_human_behavior(page)
-
-    logger.info("等待人机验证页(5秒盾)自动跳转到登录表单...")
-    max_attempts = 3
-
-    for attempt in range(max_attempts):
-        try:
-            await page.wait_for_selector("input[name='email']", timeout=TIMEOUTS["login_wait"])
-            logger.info("检测到登录表单，已进入账号密码输入页面。")
-            break
-        except PlaywrightTimeoutError:
-            logger.warning(f"尝试 {attempt + 1} 失败：在180秒内未检测到登录输入框。")
-            if attempt == max_attempts - 1:
-                logger.error("所有尝试均失败，退出。")
-                await page.screenshot(path="login_timeout_error.png")
-                with open("login_timeout_page_source.html", "w", encoding="utf-8") as f:
-                    f.write(await page.content())
-                send_bark_notification(
-                    "DigitalPlat 登录失败",
-                    "多次尝试后未能跳过人机验证，请检查截图和页面源代码。",
-                    level="timeSensitive"
-                )
-                raise Exception("登录失败：无法跳过人机验证")
-            
-            logger.info("刷新页面重试...")
-            await page.reload(wait_until="domcontentloaded", timeout=TIMEOUTS["page_load"])
-            await asyncio.sleep(5)
-
-    logger.info("正在填写登录信息...")
-    await page.type("input[name='email']", DP_EMAIL, delay=random.randint(50, 150))
-    await page.type("input[name='password']", DP_PASSWORD, delay=random.randint(50, 150))
-
-    logger.info("正在点击登录按钮...")
-    async with page.expect_navigation(wait_until="networkidle", timeout=TIMEOUTS["navigation"]):
-        await page.click("button[type='submit']")
-
-    if "/panel/main" not in page.url:
-        logger.error(f"登录失败，当前URL为: {page.url}")
-        await page.screenshot(path="login_failed_error.png")
-        send_bark_notification(
-            "DigitalPlat 登录失败",
-            "点击登录后未能跳转到预期的仪表盘页面。",
-            level="timeSensitive"
-        )
-        raise Exception("登录失败：未能跳转到仪表盘")
-
-    logger.info("登录成功！已进入用户仪表盘。")
-
-async def process_domain(page, domain_name, domain_url_path, base_url):
-    """处理单个域名的续期"""
-    try:
-        full_domain_url = base_url + domain_url_path
-        logger.info(f"正在访问 {domain_name} 的管理页面: {full_domain_url}")
-        await page.goto(full_domain_url, wait_until="networkidle", timeout=TIMEOUTS["navigation"])
-
-        renew_locator = page.locator("button:has-text('Renew'), button:has-text('续期'), button:has-text('Prolong'), a[href*='renewdomain']")
+        playwright = await async_playwright().start()
         
-        if await renew_locator.count() > 0:
-            logger.info("找到续期链接/按钮，开始续期流程...")
-            renew_button_or_link = renew_locator.first
-
-            async with page.expect_navigation(wait_until="networkidle", timeout=TIMEOUTS["navigation"]):
-                await renew_button_or_link.click()
-
-            order_button = page.locator("button:has-text('Order Now'), button:has-text('Continue')").first
-            if await order_button.count() > 0:
-                async with page.expect_navigation(wait_until="networkidle", timeout=TIMEOUTS["navigation"]):
-                    await order_button.click()
-
-                agree_checkbox = page.locator("input[name='accepttos']")
-                if await agree_checkbox.count() > 0:
-                    await agree_checkbox.check()
-
-                checkout_button = page.locator("button#checkout")
-                if await checkout_button.count() > 0:
-                    async with page.expect_navigation(wait_until="networkidle", timeout=TIMEOUTS["navigation"]):
-                        await checkout_button.click()
-
-                    await asyncio.sleep(2)
-                    page_content = await page.inner_text("body")
-                    if "Order Confirmation" in page_content or "successfully" in page_content.lower():
-                        logger.info(f"成功！域名 {domain_name} 续期订单已提交。")
-                        return True, None
-                    else:
-                        error_msg = f"{domain_name} (确认失败)"
-                        logger.warning(f"域名 {domain_name} 最终确认失败")
-                        await page.screenshot(path=f"error_{domain_name}_confirm.png")
-                        return False, error_msg
-                else:
-                    error_msg = f"{domain_name} (无Checkout按钮)"
-                    logger.warning(f"在 {domain_name} 的续期页面找不到 'Checkout' 按钮")
-                    return False, error_msg
-            else:
-                error_msg = f"{domain_name} (无Order按钮)"
-                logger.warning(f"在 {domain_name} 的续期页面找不到 'Order Now' 按钮")
-                return False, error_msg
+        # 准备代理设置
+        proxy_settings = None
+        if PROXY_URL:
+            print_log("检测到代理配置，将使用代理。", "debug")
+            proxy_settings = {"server": PROXY_URL}
         else:
-            logger.info(f"域名 {domain_name} 在此详情页未找到续期按钮/链接，可能无需续期。")
-            return None, None
+            print_log("未检测到代理配置，将直接连接 (在GHA上大概率失败)。", "warning")
 
+        browser = await playwright.chromium.launch(
+            headless=False, # <-- 1. CRITICAL CHANGE: 必须以 "有头" 模式运行
+            executable_path=CONFIG["executablePath"], # (值为 None)
+            args=CONFIG["browser_args"],
+            proxy=proxy_settings, # <-- 在此应用代理
+            ignore_default_args=[
+                "--enable-automation",
+                "--enable-blink-features=IdleDetection"
+            ]
+        )
+        context = await browser.new_context(
+            viewport={"width": 1280, "height": 720},
+            # <-- 2. CRITICAL CHANGE: 更新为现代的 User-Agent
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36",
+            ignore_https_errors=True
+        )
+        page = await context.new_page()
+        return playwright, browser, context, page
     except Exception as e:
-        error_msg = f"{domain_name} (异常: {str(e)})"
-        logger.error(f"处理域名 {domain_name} 时发生错误: {e}")
-        await page.screenshot(path=f"error_{domain_name}_exception.png")
-        return False, error_msg
+        print_log(f"浏览器初始化失败: {str(e)}", "error")
+        if "executable doesn't exist" in str(e):
+            print_log("请检查Chromium安装路径是否正确", "warning")
+        raise
 
+# ------------------------------------------
+# vvvvvvvvvvvv 关键修改在这里 vvvvvvvvvvvv
+# ------------------------------------------
 
-async def run_renewal():
-    """主执行函数，运行完整的登录和续期流程。"""
-    validate_config()
-
-    browser = None
-    page = None
-    renewed_domains = []
-    failed_domains = []
-
-    async with async_playwright() as p:
+async def do_login(page):
+    try:
+        print_log("正在访问登录页面...")
+        await page.goto("https://dash.domain.digitalplat.org/auth/login", timeout=CONFIG["timeout"])
+        
+        print_log("等待登录表单变为[可见]状态...")
+        
+        # 步骤 A: 等待 Email 输入框变为可见
+        email_input = page.locator('input[name="email"]')
         try:
-            logger.info("正在启动浏览器 (Chromium, Headed 模式)...")
-            browser, context = await setup_browser_context(p)
-            page = await context.new_page()
-
-            logger.info("正在应用 playwright-stealth 补丁...")
-            await stealth_async(page) # <-- 3. 在页面创建后立刻应用 stealth 补丁
-
-            await add_anti_detection_scripts(page)
-
-            await login(page)
-
-            logger.info("\n正在导航到域名管理页面...")
-            await page.goto(DOMAINS_URL, wait_until="networkidle", timeout=TIMEOUTS["navigation"])
-
-            await page.wait_for_selector("table.table-domains", timeout=TIMEOUTS["element_wait"])
-            logger.info("已到达域名列表页面。")
-
-            domain_rows = await page.locator("table.table-domains tbody tr").all()
-            if not domain_rows:
-                logger.info("未找到任何域名。")
-            else:
-                logger.info(f"共找到 {len(domain_rows)} 个域名，开始逐一检查...")
-                base_url = "https://dash.domain.digitalplat.org/"
-
-                for i, row in enumerate(domain_rows):
-                    onclick_attr = await row.get_attribute("onclick")
-                    if onclick_attr:
-                        domain_url_path = onclick_attr.split("'")[1]
-                        domain_name = await row.locator("td:nth-child(1)").inner_text()
-                        status = await row.locator("td:nth-child(3)").inner_text()
-                        domain_name = domain_name.strip()
-                        status = status.strip()
-                        logger.info(f"\n[{i+1}/{len(domain_rows)}] 检查域名: {domain_name} (状态: {status})")
-
-                        success, error_msg = await process_domain(page, domain_name, domain_url_path, base_url)
-                        if success:
-                            renewed_domains.append(domain_name)
-                        elif error_msg:
-                            failed_domains.append(error_msg)
-
-                        logger.info("正在返回域名列表页面...")
-                        await page.goto(DOMAINS_URL, wait_until="networkidle", timeout=TIMEOUTS["navigation"])
-                    else:
-                        logger.warning(f"第 {i+1} 行域名没有 onclick 属性，跳过。")
-
-            logger.info("\n--- 所有域名检查完成 ---")
-            if not renewed_domains and not failed_domains:
-                title = "DigitalPlat 续期检查完成"
-                body = "所有域名均检查完毕，本次没有需要续期或处理失败的域名。"
-            else:
-                title = f"DigitalPlat 续期报告"
-                body = ""
-                if renewed_domains:
-                    body += f"✅ 成功续期 {len(renewed_domains)} 个域名:\n" + "\n".join(renewed_domains) + "\n\n"
-                if failed_domains:
-                    body += f"❌ 处理失败 {len(failed_domains)} 个域名:\n" + "\n".join(failed_domains)
-            send_bark_notification(title, body.strip())
-
-            save_results(renewed_domains, failed_domains)
-
+            # 等待3分钟，应对 CF 盾
+            await email_input.wait_for(state="visible", timeout=180000)
+            print_log("Email 输入框已可见。")
         except Exception as e:
-            error_message = f"脚本执行时发生严重错误: {type(e).__name__} - {e}"
-            logger.error(f"错误: {error_message}")
-            if page:
-                await page.screenshot(path="fatal_error_screenshot.png")
-                logger.info("已保存截图 'fatal_error_screenshot.png' 以供调试。")
-            send_bark_notification("DigitalPlat 脚本严重错误", f"{error_message}\n请检查 GitHub Actions 日志获取详情。")
-            sys.exit(1)
+            print_log(f"等待 Email 输入框[可见]超时: {e}", "error", important=True)
+            await page.screenshot(path="login_email_not_visible_error.png")
+            raise Exception("登录失败：Email 输入框未变为可见")
+
+        # 步骤 B: 模拟人类[点击]和[键入] Email
+        print_log("正在模拟[键入] Email (以触发页面 JS)...")
+        await email_input.click()
+        await email_input.type(CONFIG["email"], delay=random.randint(50, 150))
+        
+        # 步骤 C: [最终逻辑] 不再等待/点击 Password！直接键入！
+        print_log("正在模拟[键入] Password (即使它是隐藏的)...")
+        password_input = page.locator('input[name="password"]')
+        try:
+            # vvvvvvvvvvvv 关键修改 vvvvvvvvvvvv
+            # .type() 会自动等待元素、点击、然后键入。
+            # 我们给它一个30秒的超时时间，以防万一。
+            await password_input.type(CONFIG["password"], delay=random.randint(50, 150), timeout=30000)
+            print_log("Password 键入成功。")
+            # ^^^^^^^^^^^^^^ 关键修改 ^^^^^^^^^^^^^^
+        except Exception as e:
+            print_log(f"键入 Password 时超时: {e}", "error", important=True)
+            await page.screenshot(path="login_password_type_error.png")
+            raise Exception("登录失败：键入 Password 失败 (可能仍被隐藏)")
+        
+        # 步骤 D: 点击登录
+        await page.click('button[type="submit"]')
+        
+        try:
+            await page.wait_for_url("**/panel/main**", timeout=60000)
+            print_log("登录成功", important=True)
+            return True
+        except Exception as e:
+            print_log(f"登录状态验证失败: {str(e)}", "error")
+            await page.screenshot(path="login_failed_error.png")
+            return False
+            
+    except Exception as e:
+        print_log(f"登录流程异常: {str(e)}", "error")
+        return False
+
+# ------------------------------------------
+# ... (renew_domains 和 main 函数保持不变) ...
+# ------------------------------------------
+
+async def renew_domains(page):
+    report = {
+        "success": [],
+        "skipped": [],
+        "failed": [],
+        "errors": []
+    }
+    
+    try:
+        print_log("正在加载域名列表...")
+        await page.goto("https://dash.domain.digitalplat.org/panel/main?page=%2Fpanel%2Fdomains", 
+                       timeout=CONFIG["timeout"])
+        
+        try:
+            await page.wait_for_selector('table tbody tr', timeout=60000)
+            rows = await page.query_selector_all('table tbody tr')
+            print_log(f"发现 {len(rows)} 个域名", important=True)
+            
+            for i, row in enumerate(rows, 1):
+                domain = "未知域名"
+                try:
+                    domain_cell = await row.query_selector('td:nth-child(2)')
+                    domain = (await domain_cell.inner_text()).strip() if domain_cell else "未知域名"
+                    
+                    renew_btn = await row.query_selector('button:has-text("Renew"), button:has-text("续期"), button:has-text("Prolong")')
+                    
+                    if not renew_btn:
+                        report["skipped"].append(domain)
+                        print_log(f"[{i}/{len(rows)}] {domain} - 无需续期", "warning")
+                        continue
+
+                    print_log(f"[{i}/{len(rows)}] {domain} - 正在续期...")
+                    await renew_btn.click()
+                    
+                    try:
+                        await page.wait_for_selector('text=确认', timeout=15000)
+                        await page.click('text=确认')
+                        await asyncio.sleep(3 + random.uniform(0, 1))
+                        report["success"].append(domain)
+                        print_log(f"[{i}/{len(rows)}] {domain} - 续期成功 ✅", important=True)
+                    except Exception as e:
+                        error_msg = f"确认按钮超时: {str(e)}"
+                        print_log(f"[{i}/{len(rows)}] {domain} - {error_msg}", "error")
+                        report["failed"].append(domain)
+                        report["errors"].append(error_msg)
+
+                except Exception as e:
+                    error_msg = f"处理失败: {str(e)[:80]}"
+                    print_log(f"[{i}/{len(rows)}] {domain} - {error_msg}", "error")
+                    report["failed"].append(domain)
+                    report["errors"].append(error_msg)
+                    
+        except Exception as e:
+            error_msg = f"加载域名列表失败: {str(e)}"
+            print_log(error_msg, "error")
+            report["errors"].append(error_msg)
+            
+    except Exception as e:
+        error_msg = f"续期流程异常: {str(e)}"
+        print_log(error_msg, "error")
+        report["errors"].append(error_msg)
+        
+    return report
+
+
+async def main():
+    start_time = time.time()
+    
+    # GHA 移植修改 4: 添加启动前配置校验
+    if not CONFIG["email"] or not CONFIG["password"]:
+        print_log("错误：DP_EMAIL 或 DP_PASSWORD 环境变量未设置！", "error", important=True)
+        print_log("请在 GitHub Secrets 中设置 DP_EMAIL 和 DP_PASSWORD。", "error")
+        exit(1) # 严重错误，直接退出
+    
+    print_log("DigitalPlat 自动续期脚本启动 (GHA 移植版)", important=True)
+    
+    for attempt in range(1, CONFIG["max_retries"] + 1):
+        print_log(f"尝试 #{attempt}/{CONFIG['max_retries']}", important=True)
+        playwright = None
+        browser = None
+        try:
+            playwright, browser, context, page = await init_browser()
+            report = {
+                "start_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "attempt": attempt
+            }
+            
+            if not await do_login(page):
+                report["errors"] = ["登录失败"]
+                raise Exception("登录失败")
+                
+            domain_report = await renew_domains(page)
+            report.update(domain_report)
+            
+            # 生成TG报告
+            if report.get("errors"):
+                message = f"⚠️ *DigitalPlat 续期结果* ⚠️\n" \
+                        f"⏱️ 时间: {report['start_time']}\n" \
+                        f"🔄 尝试: {attempt}/{CONFIG['max_retries']}\n" \
+                        f"✅ 成功: {len(report.get('success', []))}\n" \
+                        f"⏭️ 跳过: {len(report.get('skipped', []))}\n" \
+                        f"❌ 失败: {len(report.get('failed', []))}\n\n" \
+                        f"最后错误: {report['errors'][-1][:200]}"
+            else:
+                message = f"✅ *DigitalPlat 续期成功* ✅\n" \
+                        f"⏱️ 时间: {report['start_time']}\n" \
+                        f"🔄 尝试次数: {attempt}\n" \
+                        f"✔️ 成功: {len(report.get('success', []))}个\n" \
+                        f"⏭️ 跳过: {len(report.get('skipped', []))}个"
+                
+                if report.get('success'):
+                    message += "\n\n🎉 成功续期:\n" + "\n".join(f"• {d}" for d in report['success'][:5])
+                    if len(report['success']) > 5:
+                        message += f"\n...等 {len(report['success'])} 个域名"
+            
+            await tg_send(message)
+            break
+            
+        except Exception as e:
+            print_log(f"尝试 #{attempt} 失败: {str(e)}", "error")
+            if 'page' in locals():
+                # 捕获截图以供调试
+                await page.screenshot(path=f"attempt_{attempt}_failed_screenshot.png")
+                print_log(f"已保存失败截图: attempt_{attempt}_failed_screenshot.png", "debug")
+
+            if attempt == CONFIG["max_retries"]:
+                await tg_send(f"❌ *DigitalPlat 续期彻底失败* ❌\n" \
+                             f"已重试 {CONFIG['max_retries']} 次\n" \
+                             f"最后错误: {str(e)}\n" \
+                             f"请立即手动检查!")
+            await asyncio.sleep(30)
         finally:
-            if browser and browser.is_connected():
-                logger.info("关闭浏览器...")
+            if 'browser' in locals() and browser:
                 await browser.close()
+            if 'playwright' in locals() and playwright:
+                await playwright.stop()
+            print_log(f"本次执行耗时: {time.time() - start_time:.1f}秒", "debug")
+
 
 if __name__ == "__main__":
-    asyncio.run(run_renewal())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print_log("收到终止信号，脚本停止", important=True)
+    except Exception as e:
+        print_log(f"脚本执行异常: {str(e)}", "error")
+        # GHA 确保在主协程之外也能发送TG通知
+        asyncio.run(tg_send(f"🔥 *续期脚本执行异常* 🔥\n错误: {str(e)}"))
+    finally:
+        print_log("脚本执行结束", important=True)
