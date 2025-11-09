@@ -4,6 +4,7 @@
 # (已修正登录 URL)
 # (已修正 do_login 逻辑以等待元素可见)
 # (已修正 print_log 中的 Color.END 拼写错误)
+# (已修正 do_login 的交互顺序)
 
 import asyncio
 import os
@@ -43,7 +44,7 @@ CONFIG = {
 PROXY_URL = os.getenv("PROXY_URL") # 格式: http://... 或 socks5://...
 
 # ------------------------------------------
-# ... 
+# ... (Color, print_log, tg_send, init_browser 函数保持不变) ...
 # ------------------------------------------
 
 class Color:
@@ -72,9 +73,7 @@ def print_log(message, level="info", important=False):
         prefix = "ℹ️ INFO"
     if important:
         color = Color.BOLD + color
-    # vvvvvvvvvvvv 这是唯一修改的行 vvvvvvvvvvvv
     print(f"{Color.WHITE}[{timestamp}]{Color.END} {color}{prefix}:{Color.END} {message}")
-    # ^^^^^^^^^^^^^^ 这是唯一修改的行 ^^^^^^^^^^^^^^
 
 
 async def tg_send(text):
@@ -134,7 +133,7 @@ async def init_browser():
         raise
 
 # ------------------------------------------
-# (do_login 函数是正确的, 无需修改)
+# vvvvvvvvvvvv 关键修改在这里 vvvvvvvvvvvv
 # ------------------------------------------
 
 async def do_login(page):
@@ -142,16 +141,12 @@ async def do_login(page):
         print_log("正在访问登录页面...")
         await page.goto("https://dash.domain.digitalplat.org/auth/login", timeout=CONFIG["timeout"])
         
-        # --- 修正逻辑 ---
-        # 1. 不再使用旧的 wait_for_selector，因为它只等待 DOM，不等待“可见”。
-        # 2. 我们将使用 page.locator(...).wait_for() 来明确等待“可见”状态。
-        
         print_log("等待登录表单变为[可见]状态...")
         
         # 步骤 A: 等待 Email 输入框变为可见
         email_input = page.locator('input[name="email"]')
         try:
-            # 等待3分钟，应对 CF 盾（虽然我们已经通过了，但保留这个时间是安全的）
+            # 等待3分钟，应对 CF 盾
             await email_input.wait_for(state="visible", timeout=180000)
             print_log("Email 输入框已可见。")
         except Exception as e:
@@ -159,23 +154,27 @@ async def do_login(page):
             await page.screenshot(path="login_email_not_visible_error.png")
             raise Exception("登录失败：Email 输入框未变为可见")
 
-        # 步骤 B: 等待 Password 输入框变为可见
+        # 步骤 B: [新逻辑] 先填写 Email，以触发 JS
+        print_log("正在填写 Email (以触发页面 JS)...")
+        await email_input.click() # 模拟点击
+        await email_input.fill(CONFIG["email"])
+
+        # 步骤 C: [新逻辑] 现在再去等待 Password 输入框变为可见
         password_input = page.locator('input[name="password"]')
         try:
-            # 页面JS可能需要一点时间，我们给它30秒
+            # 页面JS应该很快反应，我们给它30秒
             await password_input.wait_for(state="visible", timeout=30000)
             print_log("Password 输入框已可见。")
         except Exception as e:
             print_log(f"等待 Password 输入框[可见]超时: {e}", "error", important=True)
             await page.screenshot(path="login_password_not_visible_error.png")
-            raise Exception("登录失败：Password 输入框未变为可见")
+            raise Exception("登录失败：Password 输入框未变为可见 (Email 交互后)")
 
-        # 步骤 C: 两个框都可见后，再填写
-        print_log("正在填写登录表单...")
-        await email_input.fill(CONFIG["email"])
+        # 步骤 D: 填写 Password
+        print_log("正在填写 Password...")
         await password_input.fill(CONFIG["password"])
         
-        # 步骤 D: 点击登录
+        # 步骤 E: 点击登录
         await page.click('button[type="submit"]')
         
         try:
