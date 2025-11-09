@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-# (这是最终的“混合”版本)
-# (1. 使用我们完善的“地狱模式”登录流: headless=False + 多阶段 + 按回车)
-# (2. 使用您原版 domains.py 的“简单”续期流: table tbody tr)
-# (3. 它必须配合 'xvfb-run' 和 'headless=False' 运行)
+# (这是最终的 Python 脚本)
+# (它正确地处理了“多阶段登录”和“按回车”提交Email)
+# (它现在会“点击”Login按钮，而不是按回车)
+# (它必须配合 'xvfb-run' 和 'headless=False' 运行)
 
 import asyncio
 import os
@@ -13,8 +13,8 @@ import urllib.parse
 import time
 import random
 from datetime import datetime
-import json 
-import logging 
+import json # (renew.py 的逻辑需要 json)
+import logging # (renew.py 的逻辑需要 logging)
 
 # --- 1. 配置您的信息 (已为您填好) ---
 CONFIG = {
@@ -44,6 +44,14 @@ CONFIG = {
 
 # --- (GHA 移植) ---
 PROXY_URL = os.getenv("PROXY_URL") # 格式: http://... 或 socks5://...
+
+# --- (来自 renew.py 的超时配置) ---
+TIMEOUTS = {
+    "page_load": 60000,
+    "element_wait": 30000,
+    "navigation": 60000,
+    "login_wait": 180000
+}
 DOMAINS_URL = "https://dash.domain.digitalplat.org/panel/main?page=%2Fpanel%2Fdomains"
 
 # ------------------------------------------
@@ -134,7 +142,7 @@ async def init_browser():
         raise
 
 # ------------------------------------------
-# (这是 domains.py 的“多阶段”+“按回车”登录逻辑)
+# (这是正确的“多阶段”+“回车+点击”登录逻辑)
 # ------------------------------------------
 
 async def do_login(page):
@@ -175,88 +183,105 @@ async def do_login(page):
         print_log("正在模拟[键入] Password...")
         await password_input.type(CONFIG["password"], delay=random.randint(50, 150))
         
-        print_log("正在模拟按 [Enter] 键提交 Password (绕过'Login'按钮)...")
-        await password_input.press('Enter')
+        # 步骤 F: [最终逻辑] 模拟“真人”点击 "Login" 按钮
+        print_log("正在模拟点击 'Login' 按钮...")
+        # vvvvvvvvvvvv 关键修改 vvvvvvvvvvvv
+        # (我们不再按回车, 而是点击那个现在可见的按钮)
+        submit_btn_step2 = page.locator('button[type="submit"]')
+        try:
+            # (我们赌它在 CF 盾通过后一定是可见的)
+            await submit_btn_step2.click(timeout=30000)
+            print_log("'Login' 按钮点击成功。")
+        except Exception as e:
+            print_log(f"点击 'Login' 按钮失败: {e}", "error")
+            await page.screenshot(path="login_login_button_click_error.png")
+            raise Exception("登录失败：点击 Login 按钮失败")
+        # ^^^^^^^^^^^^^^ 关键修改 ^^^^^^^^^^^^^^
         
-        # 步骤 G: [最终逻辑] 不再验证! 假定登录成功!
-        # 我们知道 wait_for_url 会失败, 所以我们直接返回 True
-        print_log("登录信息已提交! 假定登录成功!", important=True)
-        return True
+        # 步骤 G: 等待登录成功 (等待跳转到仪表盘)
+        try:
+            # 点击 Login 后, 我们将等待页面跳转到仪表盘
+            await page.wait_for_url("**/panel/main**", timeout=60000)
+            print_log("登录成功! 已跳转到仪表盘。", important=True)
+            return True
+        except Exception as e:
+            print_log(f"登录状态验证失败 (点击 Login 后): {str(e)}", "error", important=True)
+            print_log("!!!!!! 严重警告: 脚本已成功提交登录, 但未跳转到仪表盘! 99% 的可能是 DP_PASSWORD 错误! (请再次确认!) !!!!!!", "error", important=True)
+            await page.screenshot(path="login_failed_after_login_click_error.png")
+            return False
             
     except Exception as e:
         print_log(f"登录流程异常: {str(e)}", "error")
         return False
 
 # ------------------------------------------
-# vvvvvvvvvvvv (这是您原版 domains.py 的“续期”逻辑) vvvvvvvvvvvv
+# vvvvvvvvvvvv (这是 renew.py 的“专业”续期逻辑) vvvvvvvvvvvv
 # ------------------------------------------
-async def renew_domains(page):
-    report = {
-        "success": [],
-        "skipped": [],
-        "failed": [],
-        "errors": []
-    }
-    
+async def process_domain(page, domain_name, domain_url_path, base_url):
+    """处理单个域名的续期 (来自 renew.py)"""
     try:
-        print_log("正在加载域名列表 (使用 'domains.py' 原版逻辑)...")
-        await page.goto(DOMAINS_URL, 
-                       timeout=CONFIG["timeout"])
-        
-        try:
-            # (这是原版的、正确的选择器)
-            await page.wait_for_selector('table tbody tr', timeout=60000)
-            rows = await page.query_selector_all('table tbody tr')
-            print_log(f"发现 {len(rows)} 个域名", important=True)
-            
-            for i, row in enumerate(rows, 1):
-                domain = "未知域名"
-                try:
-                    domain_cell = await row.query_selector('td:nth-child(2)')
-                    domain = (await domain_cell.inner_text()).strip() if domain_cell else "未知域名"
-                    
-                    renew_btn = await row.query_selector('button:has-text("Renew"), button:has-text("续期"), button:has-text("Prolong")')
-                    
-                    if not renew_btn:
-                        report["skipped"].append(domain)
-                        print_log(f"[{i}/{len(rows)}] {domain} - 无需续期", "warning")
-                        continue
+        # 构造并访问域名管理页面
+        full_domain_url = base_url + domain_url_path
+        print_log(f"正在访问 {domain_name} 的管理页面: {full_domain_url}")
+        await page.goto(full_domain_url, wait_until="networkidle", timeout=TIMEOUTS["navigation"])
 
-                    print_log(f"[{i}/{len(rows)}] {domain} - 正在续期...")
-                    await renew_btn.click()
-                    
-                    try:
-                        await page.wait_for_selector('text=确认', timeout=15000)
-                        await page.click('text=确认')
-                        await asyncio.sleep(3 + random.uniform(0, 1))
-                        report["success"].append(domain)
-                        print_log(f"[{i}/{len(rows)}] {domain} - 续期成功 ✅", important=True)
-                    except Exception as e:
-                        error_msg = f"确认按钮超时: {str(e)}"
-                        print_log(f"[{i}/{len(rows)}] {domain} - {error_msg}", "error")
-                        report["failed"].append(domain)
-                        report["errors"].append(error_msg)
+        # 查找续期链接
+        renew_link = page.locator("a[href*='renewdomain']")
+        if await renew_link.count() > 0:
+            print_log("找到续期链接，开始续期流程...")
 
-                except Exception as e:
-                    error_msg = f"处理失败: {str(e)[:80]}"
-                    print_log(f"[{i}/{len(rows)}] {domain} - {error_msg}", "error")
-                    report["failed"].append(domain)
-                    report["errors"].append(error_msg)
-                    
-        except Exception as e:
-            error_msg = f"加载域名列表失败: {str(e)}"
-            print_log(error_msg, "error")
-            report["errors"].append(error_msg)
-            
+            # 点击续期链接
+            async with page.expect_navigation(wait_until="networkidle", timeout=TIMEOUTS["navigation"]):
+                await renew_link.click()
+
+            # 点击"Order Now"或"Continue"
+            order_button = page.locator("button:has-text('Order Now'), button:has-text('Continue')").first
+            if await order_button.count() > 0:
+                async with page.expect_navigation(wait_until="networkidle", timeout=TIMEOUTS["navigation"]):
+                    await order_button.click()
+
+                # 同意条款
+                agree_checkbox = page.locator("input[name='accepttos']")
+                if await agree_checkbox.count() > 0:
+                    await agree_checkbox.check()
+
+                # 完成结账
+                checkout_button = page.locator("button#checkout")
+                if await checkout_button.count() > 0:
+                    async with page.expect_navigation(wait_until="networkidle", timeout=TIMEOUTS["navigation"]):
+                        await checkout_button.click()
+
+                    # 检查订单确认
+                    await asyncio.sleep(2)  # 等待页面完全加载
+                    page_content = await page.inner_text("body")
+                    if "Order Confirmation" in page_content or "successfully" in page_content.lower():
+                        print_log(f"成功！域名 {domain_name} 续期订单已提交。")
+                        return True, None
+                    else:
+                        error_msg = f"{domain_name} (确认失败)"
+                        print_log(f"域名 {domain_name} 最终确认失败", "warning")
+                        await page.screenshot(path=f"error_{domain_name}_confirm.png")
+                        return False, error_msg
+                else:
+                    error_msg = f"{domain_name} (无Checkout按钮)"
+                    print_log(f"在 {domain_name} 的续期页面找不到 'Checkout' 按钮", "warning")
+                    return False, error_msg
+            else:
+                error_msg = f"{domain_name} (无Order按钮)"
+                print_log(f"在 {domain_name} 的续期页面找不到 'Order Now' 按钮", "warning")
+                return False, error_msg
+        else:
+            print_log("在此域名详情页未找到续期链接，可能无需续期。")
+            return None, None
+
     except Exception as e:
-        error_msg = f"续期流程异常: {str(e)}"
-        print_log(error_msg, "error")
-        report["errors"].append(error_msg)
-        
-    return report
+        error_msg = f"{domain_name} (异常: {str(e)})"
+        print_log(f"处理域名 {domain_name} 时发生错误: {e}", "error")
+        await page.screenshot(path=f"error_{domain_name}_exception.png")
+        return False, error_msg
 
 # ------------------------------------------
-# (这是重写的 main 函数，它结合了 do_login 和 *原版* renew_domains)
+# (这是重写的 main 函数，它结合了 do_login 和 renew.py 的续期循环)
 # ------------------------------------------
 async def main():
     start_time = time.time()
@@ -267,8 +292,11 @@ async def main():
         print_log("请在 GitHub Secrets 中设置 DP_EMAIL 和 DP_PASSWORD。", "error")
         exit(1) # 严重错误，直接退出
     
-    print_log("DigitalPlat 自动续期脚本启动 (GHA 最终混合版)", important=True)
+    print_log("DigitalPlat 自动续期脚本启动 (GHA 混合版)", important=True)
     
+    renewed_domains = []
+    failed_domains = []
+
     for attempt in range(1, CONFIG["max_retries"] + 1):
         print_log(f"尝试 #{attempt}/{CONFIG['max_retries']}", important=True)
         playwright = None
@@ -284,32 +312,61 @@ async def main():
             if not await do_login(page):
                 raise Exception("登录失败")
             
-            # 2. 登录“成功”后，执行 domains.py 的续期逻辑
-            domain_report = await renew_domains(page) # <-- 关键修改
-            report.update(domain_report)
-            
-            # 3. (domains.py 逻辑) 发送最终执行结果通知
-            if report.get("errors"):
-                message = f"⚠️ *DigitalPlat 续期结果* ⚠️\n" \
-                        f"⏱️ 时间: {report['start_time']}\n" \
-                        f"🔄 尝试: {attempt}/{CONFIG['max_retries']}\n" \
-                        f"✅ 成功: {len(report.get('success', []))}\n" \
-                        f"⏭️ 跳过: {len(report.get('skipped', []))}\n" \
-                        f"❌ 失败: {len(report.get('failed', []))}\n\n" \
-                        f"最后错误: {report['errors'][-1][:200]}"
+            # 2. 登录“成功”后，执行 renew.py 的续期逻辑
+            print_log("\n正在导航到域名管理页面...")
+            await page.goto(DOMAINS_URL, wait_until="networkidle", timeout=TIMEOUTS["navigation"])
+
+            # (!!! 关键: 这里使用 renew.py 的选择器 !!!)
+            await page.wait_for_selector("table.table-domains", timeout=TIMEOUTS["element_wait"])
+            print_log("已到达域名列表页面。")
+
+            # 获取所有域名行
+            domain_rows = await page.locator("table.table-domains tbody tr").all()
+            if not domain_rows:
+                print_log("未找到任何域名。")
             else:
-                message = f"✅ *DigitalPlat 续期成功* ✅\n" \
-                        f"⏱️ 时间: {report['start_time']}\n" \
-                        f"🔄 尝试次数: {attempt}\n" \
-                        f"✔️ 成功: {len(report.get('success', []))}个\n" \
-                        f"⏭️ 跳过: {len(report.get('skipped', []))}个"
-                
-                if report.get('success'):
-                    message += "\n\n🎉 成功续期:\n" + "\n".join(f"• {d}" for d in report['success'][:5])
-                    if len(report['success']) > 5:
-                        message += f"\n...等 {len(report['success'])} 个域名"
+                print_log(f"共找到 {len(domain_rows)} 个域名，开始逐一检查...")
+                base_url = "https://dash.domain.digitalplat.org/"
+
+                # (renew.py 逻辑) 处理每个域名
+                for i, row in enumerate(domain_rows):
+                    # 从 onclick 属性中提取域名和状态
+                    onclick_attr = await row.get_attribute("onclick")
+                    if onclick_attr:
+                        domain_url_path = onclick_attr.split("'")[1]
+                        domain_name = await row.locator("td:nth-child(1)").inner_text()
+                        status = await row.locator("td:nth-child(3)").inner_text()
+                        domain_name = domain_name.strip()
+                        status = status.strip()
+                        print_log(f"\n[{i+1}/{len(domain_rows)}] 检查域名: {domain_name} (状态: {status})")
+
+                        # 处理域名续期
+                        success, error_msg = await process_domain(page, domain_name, domain_url_path, base_url)
+                        if success:
+                            renewed_domains.append(domain_name)
+                        elif error_msg:
+                            failed_domains.append(error_msg)
+
+                        # 返回域名列表页面以便处理下一个
+                        print_log("正在返回域名列表页面...")
+                        await page.goto(DOMAINS_URL, wait_until="networkidle", timeout=TIMEOUTS["navigation"])
+                    else:
+                        print_log(f"第 {i+1} 行域名没有 onclick 属性，跳过。", "warning")
+
             
-            await tg_send(message)
+            # 3. (renew.py 逻辑) 发送最终执行结果通知
+            print_log("\n--- 所有域名检查完成 ---")
+            if not renewed_domains and not failed_domains:
+                title = "DigitalPlat 续期检查完成"
+                body = "所有域名均检查完毕，本次没有需要续期或处理失败的域名。"
+            else:
+                title = f"DigitalPlat 续期报告"
+                body = ""
+                if renewed_domains:
+                    body += f"✅ 成功续期 {len(renewed_domains)} 个域名:\n" + "\n".join(renewed_domains) + "\n\n"
+                if failed_domains:
+                    body += f"❌ 处理失败 {len(failed_domains)} 个域名:\n" + "\n".join(failed_domains)
+            await tg_send(body.strip())
             
             # 4. 如果一切顺利，跳出重试循环
             break
