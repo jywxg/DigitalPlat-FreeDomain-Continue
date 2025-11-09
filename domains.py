@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 # (已修正登录 URL)
+# (已修正 do_login 逻辑以等待元素可见)
 
 import asyncio
 import os
@@ -41,7 +42,7 @@ CONFIG = {
 PROXY_URL = os.getenv("PROXY_URL") # 格式: http://... 或 socks5://...
 
 # ------------------------------------------
-# 以下所有代码 (Color, print_log, tg_send) 均来自您原始的 domains.py
+# ... (Color, print_log, tg_send, init_browser 函数保持不变) ...
 # ------------------------------------------
 
 class Color:
@@ -70,7 +71,7 @@ def print_log(message, level="info", important=False):
         prefix = "ℹ️ INFO"
     if important:
         color = Color.BOLD + color
-    print(f"{Color.WHITE}[{timestamp}]{Color.END} {color}{prefix}:{Color.END} {message}")
+    print(f"{Color.WHITE}[{timestamp}]{Color.END} {color}{prefix}:{Color_END} {message}")
 
 
 async def tg_send(text):
@@ -130,29 +131,48 @@ async def init_browser():
         raise
 
 # ------------------------------------------
-# 以下代码中仅修改了 do_login 的 URL
+# vvvvvvvvvvvv 关键修改在这里 vvvvvvvvvvvv
 # ------------------------------------------
 
 async def do_login(page):
     try:
         print_log("正在访问登录页面...")
-        # vvvvvvvvvvvv 这是唯一的、关键的修改 vvvvvvvvvvvv
         await page.goto("https://dash.domain.digitalplat.org/auth/login", timeout=CONFIG["timeout"])
-        # ^^^^^^^^^^^^^^ 这是唯一的、关键的修改 ^^^^^^^^^^^^^^
         
+        # --- 修正逻辑 ---
+        # 1. 不再使用旧的 wait_for_selector，因为它只等待 DOM，不等待“可见”。
+        # 2. 我们将使用 page.locator(...).wait_for() 来明确等待“可见”状态。
+        
+        print_log("等待登录表单变为[可见]状态...")
+        
+        # 步骤 A: 等待 Email 输入框变为可见
+        email_input = page.locator('input[name="email"]')
         try:
-            # GHA 关键等待：等待 CF 盾跳转后出现 email 输入框
-            await page.wait_for_selector('input[name="email"]', timeout=180000) # 3分钟
+            # 等待3分钟，应对 CF 盾（虽然我们已经通过了，但保留这个时间是安全的）
+            await email_input.wait_for(state="visible", timeout=180000)
+            print_log("Email 输入框已可见。")
         except Exception as e:
-            # 如果3分钟后还是没出现输入框，说明 IP 被拦截了
-            print_log(f"等待登录框超时: {str(e)}", "error", important=True)
-            print_log("失败：在180秒内未检测到登录输入框。IP 可能被 Cloudflare 拦截。", "error")
-            await page.screenshot(path="login_timeout_error.png")
-            raise Exception("登录失败：无法跳过人机验证 (IP 被拦截)")
+            print_log(f"等待 Email 输入框[可见]超时: {e}", "error", important=True)
+            await page.screenshot(path="login_email_not_visible_error.png")
+            raise Exception("登录失败：Email 输入框未变为可见")
 
+        # 步骤 B: 等待 Password 输入框变为可见
+        password_input = page.locator('input[name="password"]')
+        try:
+            # 页面JS可能需要一点时间，我们给它30秒
+            await password_input.wait_for(state="visible", timeout=30000)
+            print_log("Password 输入框已可见。")
+        except Exception as e:
+            print_log(f"等待 Password 输入框[可见]超时: {e}", "error", important=True)
+            await page.screenshot(path="login_password_not_visible_error.png")
+            raise Exception("登录失败：Password 输入框未变为可见")
+
+        # 步骤 C: 两个框都可见后，再填写
         print_log("正在填写登录表单...")
-        await page.fill('input[name="email"]', CONFIG["email"])
-        await page.fill('input[name="password"]', CONFIG["password"])
+        await email_input.fill(CONFIG["email"])
+        await password_input.fill(CONFIG["password"])
+        
+        # 步骤 D: 点击登录
         await page.click('button[type="submit"]')
         
         try:
@@ -168,6 +188,9 @@ async def do_login(page):
         print_log(f"登录流程异常: {str(e)}", "error")
         return False
 
+# ------------------------------------------
+# ... (renew_domains 和 main 函数保持不变) ...
+# ------------------------------------------
 
 async def renew_domains(page):
     report = {
