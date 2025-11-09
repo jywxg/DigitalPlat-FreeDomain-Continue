@@ -7,7 +7,8 @@
 # (已修正 do_login 的交互顺序)
 # (最终 Boss 修正: 启用 Headless=False 并更新 User-Agent)
 # (最终逻辑修正: 完整的多阶段登录流程 - 根据用户的最终描述)
-# (最终绝招: 强制点击被 JS 隐藏的按钮)
+# (最终可靠性修正: 必须点击按钮, 而不是按 [Enter])
+# (最终的最终修正: 放弃点击, 回到“按回车”, 因为按钮是随机隐藏的)
 
 import asyncio
 import os
@@ -164,17 +165,11 @@ async def do_login(page):
         await email_input.click()
         await email_input.type(CONFIG["email"], delay=random.randint(50, 150))
         
-        # 步骤 C: [最终逻辑] 强制点击 "Next" 按钮 (即使它是隐藏的)
-        submit_btn_step1 = page.locator('button[type="submit"]')
-        try:
-            print_log("正在[强制点击] 'Next' (提交) 按钮...")
-            # vvvvvvvvvvvv 关键修改 vvvvvvvvvvvv
-            await submit_btn_step1.click(force=True, timeout=30000)
-            # ^^^^^^^^^^^^^^ 关键修改 ^^^^^^^^^^^^^^
-        except Exception as e:
-            print_log(f"[强制点击] 'Next' 按钮失败: {e}", "error")
-            await page.screenshot(path="login_next_button_click_error.png")
-            raise Exception("登录失败：[强制点击] Next 按钮失败")
+        # 步骤 C: [最终逻辑] 模拟按 [Enter] 键提交 Email
+        print_log("正在模拟按 [Enter] 键提交 Email (绕过'Next'按钮)...")
+        # vvvvvvvvvvvv 关键修改 vvvvvvvvvvvv
+        await email_input.press('Enter')
+        # ^^^^^^^^^^^^^^ 关键修改 ^^^^^^^^^^^^^^
 
         # --- 阶段 2: Password (有 CF 盾) ---
         
@@ -194,18 +189,12 @@ async def do_login(page):
         print_log("正在模拟[键入] Password...")
         await password_input.type(CONFIG["password"], delay=random.randint(50, 150))
         
-        # 步骤 F: [最终逻辑] 强制点击 "Login" 按钮 (即使它是隐藏的)
-        submit_btn_step2 = page.locator('button[type="submit"]')
-        try:
-            print_log("正在[强制点击] 'Login' 按钮...")
-            # vvvvvvvvvvvv 关键修改 vvvvvvvvvvvv
-            await submit_btn_step2.click(force=True, timeout=30000)
-            # ^^^^^^^^^^^^^^ 关键修改 ^^^^^^^^^^^^^^
-        except Exception as e:
-            print_log(f"[强制点击] 'Login' 按钮失败: {e}", "error")
-            await page.screenshot(path="login_login_button_click_error.png")
-            raise Exception("登录失败：[强制点击] Login 按钮失败")
-
+        # 步骤 F: [最终逻辑] 模拟按 [Enter] 键提交 Password
+        print_log("正在模拟按 [Enter] 键提交 Password (绕过'Login'按钮)...")
+        # vvvvvvvvvvvv 关键修改 vvvvvvvvvvvv
+        await password_input.press('Enter')
+        # ^^^^^^^^^^^^^^ 关键修改 ^^^^^^^^^^^^^^
+        
         # 步骤 G: 等待登录成功 (等待跳转到仪表盘)
         try:
             # 点击 Login 后, 我们将等待页面跳转到仪表盘
@@ -213,9 +202,9 @@ async def do_login(page):
             print_log("登录成功! 已跳转到仪表盘。", important=True)
             return True
         except Exception as e:
-            print_log(f"登录状态验证失败 (点击 Login 后): {str(e)}", "error", important=True)
+            print_log(f"登录状态验证失败 (按下Enter后): {str(e)}", "error", important=True)
             print_log("!!!!!! 严重警告: 脚本已成功提交登录, 但未跳转到仪表盘! 99% 的可能是 DP_PASSWORD 错误! (请再次确认!) !!!!!!", "error", important=True)
-            await page.screenshot(path="login_failed_after_login_click_error.png")
+            await page.screenshot(path="login_failed_after_enter_error.png")
             return False
             
     except Exception as e:
