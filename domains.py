@@ -3,6 +3,7 @@
 
 # (已修正登录 URL)
 # (已修正 do_login 逻辑以等待元素可见)
+# (已修正 print_log 中的 Color.END 拼写错误)
 
 import asyncio
 import os
@@ -42,7 +43,7 @@ CONFIG = {
 PROXY_URL = os.getenv("PROXY_URL") # 格式: http://... 或 socks5://...
 
 # ------------------------------------------
-# ... (Color, print_log, tg_send, init_browser 函数保持不变) ...
+# ... 
 # ------------------------------------------
 
 class Color:
@@ -71,7 +72,9 @@ def print_log(message, level="info", important=False):
         prefix = "ℹ️ INFO"
     if important:
         color = Color.BOLD + color
-    print(f"{Color.WHITE}[{timestamp}]{Color.END} {color}{prefix}:{Color_END} {message}")
+    # vvvvvvvvvvvv 这是唯一修改的行 vvvvvvvvvvvv
+    print(f"{Color.WHITE}[{timestamp}]{Color.END} {color}{prefix}:{Color.END} {message}")
+    # ^^^^^^^^^^^^^^ 这是唯一修改的行 ^^^^^^^^^^^^^^
 
 
 async def tg_send(text):
@@ -131,7 +134,7 @@ async def init_browser():
         raise
 
 # ------------------------------------------
-# vvvvvvvvvvvv 关键修改在这里 vvvvvvvvvvvv
+# (do_login 函数是正确的, 无需修改)
 # ------------------------------------------
 
 async def do_login(page):
@@ -338,7 +341,7 @@ if __name__ == "__main__":
         print_log("收到终止信号，脚本停止", important=True)
     except Exception as e:
         print_log(f"脚本执行异常: {str(e)}", "error")
-        # 确保在主协程之外也能发送TG通知
+        # GHA 确保在主协程之外也能发送TG通知
         asyncio.run(tg_send(f"🔥 *续期脚本执行异常* 🔥\n错误: {str(e)}"))
     finally:
         print_log("脚本执行结束", important=True)
