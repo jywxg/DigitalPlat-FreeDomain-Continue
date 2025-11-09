@@ -6,6 +6,7 @@
 # (已修正 print_log 中的 Color.END 拼写错误)
 # (已修正 do_login 的交互顺序)
 # (最终修正: 已将 .fill() 替换为 .type() 来模拟真人)
+# (最终 Boss 修正: 启用 Headless=False 并更新 User-Agent)
 
 import asyncio
 import os
@@ -22,7 +23,7 @@ CONFIG = {
     "tg_token": os.getenv("TG_TOKEN"),
     "tg_chat_id": os.getenv("TG_CHAT_ID"),
     "max_retries": 3,
-    "headless": True,  
+    "headless": True,  # (这个值不再被使用, 我们将硬编码 Headless=False)
     "slow_mo": 500,    
     "timeout": 120000,  
     "cf_timeout": 300,  
@@ -45,7 +46,7 @@ CONFIG = {
 PROXY_URL = os.getenv("PROXY_URL") # 格式: http://... 或 socks5://...
 
 # ------------------------------------------
-# ... (Color, print_log, tg_send, init_browser 函数保持不变) ...
+# ... (Color, print_log, tg_send 函数保持不变) ...
 # ------------------------------------------
 
 class Color:
@@ -111,7 +112,7 @@ async def init_browser():
             print_log("未检测到代理配置，将直接连接 (在GHA上大概率失败)。", "warning")
 
         browser = await playwright.chromium.launch(
-            headless=CONFIG["headless"],
+            headless=False, # <-- 1. CRITICAL CHANGE: 必须以 "有头" 模式运行
             executable_path=CONFIG["executablePath"], # (值为 None)
             args=CONFIG["browser_args"],
             proxy=proxy_settings, # <-- 在此应用代理
@@ -122,7 +123,8 @@ async def init_browser():
         )
         context = await browser.new_context(
             viewport={"width": 1280, "height": 720},
-            user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36",
+            # <-- 2. CRITICAL CHANGE: 更新为现代的 User-Agent
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36",
             ignore_https_errors=True
         )
         page = await context.new_page()
@@ -158,14 +160,16 @@ async def do_login(page):
         # 步骤 B: [最终逻辑] 模拟人类[点击]和[键入]，而不是[填充]
         print_log("正在模拟[键入] Email (以触发页面 JS)...")
         await email_input.click()
-        # vvvvvvvvvvvv 关键修改 vvvvvvvvvvvv
         await email_input.type(CONFIG["email"], delay=random.randint(50, 150))
-        # ^^^^^^^^^^^^^^ 关键修改 ^^^^^^^^^^^^^^
 
-        # 步骤 C: [最终逻辑] 现在再去等待 Password 输入框变为可见
+        # 步骤 C: [最终逻辑] 点击密码框 (以触发 JS onfocus/onblur)
         password_input = page.locator('input[name="password"]')
+        print_log("正在点击 Password 框 (以触发 JS)...")
+        await password_input.click() # 点击它，即使它是隐藏的
+
+        # 步骤 D: [最终逻辑] 现在再去等待 Password 输入框变为可见
         try:
-            # 键入Email后，JS应该会显示密码框。我们给它30秒
+            # 键入Email并点击Password后，JS应该会显示密码框。我们给它30秒
             await password_input.wait_for(state="visible", timeout=30000)
             print_log("Password 输入框已可见。")
         except Exception as e:
@@ -173,14 +177,12 @@ async def do_login(page):
             await page.screenshot(path="login_password_not_visible_error.png")
             raise Exception("登录失败：Password 输入框未变为可见 (Email 键入后)")
 
-        # 步骤 D: 模拟[键入] Password
+        # 步骤 E: 模拟[键入] Password
         print_log("正在模拟[键入] Password...")
-        await password_input.click()
-        # vvvvvvvvvvvv 关键修改 vvvvvvvvvvvv
+        # 我们已经点击过它了，但 .type() 会智能处理
         await password_input.type(CONFIG["password"], delay=random.randint(50, 150))
-        # ^^^^^^^^^^^^^^ 关键修改 ^^^^^^^^^^^^^^
         
-        # 步骤 E: 点击登录
+        # 步骤 F: 点击登录
         await page.click('button[type="submit"]')
         
         try:
@@ -231,7 +233,7 @@ async def renew_domains(page):
                         print_log(f"[{i}/{len(rows)}] {domain} - 无需续期", "warning")
                         continue
 
-                    print_log(f"[{i}/{len(rows)}] {domain} - Z正在续期...")
+                    print_log(f"[{i}/{len(rows)}] {domain} - 正在续期...")
                     await renew_btn.click()
                     
                     try:
