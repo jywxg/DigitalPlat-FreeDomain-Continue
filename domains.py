@@ -2,10 +2,12 @@
 # -*- coding: utf-8 -*-
 
 # (已修正登录 URL)
-# (最终的最终修正: 100% 模仿原版 domains.py)
-# (1. 切换回 Headless=True)
-# (2. 切换回“单阶段”登录流程)
-# (3. 保留“家宽”代理 和 .type() 模拟键入)
+# (已修正 do_login 逻辑以等待元素可见)
+# (已修正 print_log 中的 Color.END 拼写错误)
+# (已修正 do_login 的交互顺序)
+# (最终 Boss 修正: 启用 Headless=False 并更新 User-Agent)
+# (最终逻辑修正: 完整的多阶段登录流程 - 根据用户的最终描述)
+# (最终绝招: 强制点击被 JS 隐藏的按钮)
 
 import asyncio
 import os
@@ -22,11 +24,11 @@ CONFIG = {
     "tg_token": os.getenv("TG_TOKEN"),
     "tg_chat_id": os.getenv("TG_CHAT_ID"),
     "max_retries": 3,
-    "headless": True,  # <-- 1. 关键修正: 必须是 True
+    "headless": True,  # (这个值不再被使用, 我们将硬编码 Headless=False)
     "slow_mo": 500,    
     "timeout": 120000,  
     "cf_timeout": 300,  
-    "executablePath": None, # <-- GHA 关键修改: 设为 None
+    "executablePath": None, # <-- GHA 关键修改: 设为 None, 使用 GHA 自动下载的浏览器
     "browser_args": [   # 保留所有成功的反检测参数
         "--no-sandbox",
         "--disable-dev-shm-usage",
@@ -111,7 +113,7 @@ async def init_browser():
             print_log("未检测到代理配置，将直接连接 (在GHA上大概率失败)。", "warning")
 
         browser = await playwright.chromium.launch(
-            headless=CONFIG["headless"], # <-- 2. 关键修正: 确保使用 Headless=True
+            headless=False, # <-- 1. CRITICAL CHANGE: 必须以 "有头" 模式运行
             executable_path=CONFIG["executablePath"], # (值为 None)
             args=CONFIG["browser_args"],
             proxy=proxy_settings, # <-- 在此应用代理
@@ -122,8 +124,8 @@ async def init_browser():
         )
         context = await browser.new_context(
             viewport={"width": 1280, "height": 720},
-            # 使用原版 domains.py 的 User-Agent
-            user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36",
+            # <-- 2. CRITICAL CHANGE: 更新为现代的 User-Agent
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36",
             ignore_https_errors=True
         )
         page = await context.new_page()
@@ -140,57 +142,80 @@ async def init_browser():
 
 async def do_login(page):
     try:
-        print_log("正在访问登录页面 (模拟 'domains.py' 单阶段流程)...")
+        print_log("正在访问登录页面 (阶段 1: Email)...")
         # 增加 navigation 超时
         await page.goto("https://dash.domain.digitalplat.org/auth/login", timeout=CONFIG["timeout"], wait_until="networkidle")
         
-        # --- 阶段 1: 假设是“简单模式”，Email 和 Password 都在 ---
+        # --- 阶段 1: Email (无 CF 盾) ---
         
-        # 步骤 A: 等待 Email 输入框变为可见 (等待 CF 盾)
+        # 步骤 A: 等待 Email 输入框变为可见
         email_input = page.locator('input[name="email"]')
         try:
-            # (这是关键!) 给它一个很长的超时时间(3分钟)，以通过 CF 5秒盾
-            await email_input.wait_for(state="visible", timeout=180000)
-            print_log("Email 输入框已可见。(CF 盾已通过!)")
+            # (您说这里没有CF盾, 应该会很快)
+            await email_input.wait_for(state="visible", timeout=30000) # 缩短超时
+            print_log("Email 输入框已可见。")
         except Exception as e:
             print_log(f"等待 Email 输入框[可见]超时: {e}", "error", important=True)
             await page.screenshot(path="login_email_not_visible_error.png")
-            raise Exception("登录失败：Email 输入框未变为可见 (卡在CF盾)")
+            raise Exception("登录失败：Email 输入框未变为可见")
 
-        # 步骤 B: 等待 Password 输入框变为可见
-        password_input = page.locator('input[name="password"]')
-        try:
-            # (这是关键!) 假设它和 Email 在同一页, 也等它
-            await password_input.wait_for(state="visible", timeout=30000)
-            print_log("Password 输入框已可见。")
-        except Exception as e:
-            # [!! 关键 !!] 如果这里失败, 说明我们又被拖入了“地狱模式”
-            print_log(f"等待 Password 输入框[可见]超时: {e}", "error", important=True)
-            print_log("!!!!!! 严重警告: 网站没有显示“简单模式”登录页! 它可能因为您的代理 IP 再次激活了“多阶段”流程! !!!!!!", "error", important=True)
-            await page.screenshot(path="login_password_not_visible_error.png")
-            raise Exception("登录失败：Password 输入框未变为可见 (网站激活了多阶段流程)")
-
-        # 步骤 C: 模拟键入 Email 和 Password
+        # 步骤 B: 模拟键入 Email
         print_log("正在模拟[键入] Email ...")
         await email_input.click()
         await email_input.type(CONFIG["email"], delay=random.randint(50, 150))
         
+        # 步骤 C: [最终逻辑] 强制点击 "Next" 按钮 (即使它是隐藏的)
+        submit_btn_step1 = page.locator('button[type="submit"]')
+        try:
+            print_log("正在[强制点击] 'Next' (提交) 按钮...")
+            # vvvvvvvvvvvv 关键修改 vvvvvvvvvvvv
+            await submit_btn_step1.click(force=True, timeout=30000)
+            # ^^^^^^^^^^^^^^ 关键修改 ^^^^^^^^^^^^^^
+        except Exception as e:
+            print_log(f"[强制点击] 'Next' 按钮失败: {e}", "error")
+            await page.screenshot(path="login_next_button_click_error.png")
+            raise Exception("登录失败：[强制点击] Next 按钮失败")
+
+        # --- 阶段 2: Password (有 CF 盾) ---
+        
+        # 步骤 D: 等待 Password 输入框变为可见 (等待 CF 5秒盾)
+        print_log("等待页面跳转到密码框 (阶段 2)... (正在等待唯一的 CF 5秒盾...)")
+        password_input = page.locator('input[name="password"]')
+        try:
+            # (这是关键!) 给它一个很长的超时时间(3分钟)，以通过您说的“ CF 5秒盾”
+            await password_input.wait_for(state="visible", timeout=180000)
+            print_log("Password 输入框已可见。(CF 盾已通过!)")
+        except Exception as e:
+            print_log(f"等待 Password 输入框[可见]超时 (阶段 2): {e}", "error", important=True)
+            await page.screenshot(path="login_password_not_visible_error.png")
+            raise Exception("登录失败：Password 输入框未变为可见 (卡在CF盾)")
+
+        # 步骤 E: 模拟[键入] Password
         print_log("正在模拟[键入] Password...")
         await password_input.type(CONFIG["password"], delay=random.randint(50, 150))
         
-        # 步骤 D: 模拟按 [Enter] 键提交 (这比点击按钮更可靠)
-        print_log("正在模拟按 [Enter] 键提交...")
-        await password_input.press('Enter')
-        
-        # 步骤 E: 等待登录成功 (等待跳转到仪表盘)
+        # 步骤 F: [最终逻辑] 强制点击 "Login" 按钮 (即使它是隐藏的)
+        submit_btn_step2 = page.locator('button[type="submit"]')
         try:
+            print_log("正在[强制点击] 'Login' 按钮...")
+            # vvvvvvvvvvvv 关键修改 vvvvvvvvvvvv
+            await submit_btn_step2.click(force=True, timeout=30000)
+            # ^^^^^^^^^^^^^^ 关键修改 ^^^^^^^^^^^^^^
+        except Exception as e:
+            print_log(f"[强制点击] 'Login' 按钮失败: {e}", "error")
+            await page.screenshot(path="login_login_button_click_error.png")
+            raise Exception("登录失败：[强制点击] Login 按钮失败")
+
+        # 步骤 G: 等待登录成功 (等待跳转到仪表盘)
+        try:
+            # 点击 Login 后, 我们将等待页面跳转到仪表盘
             await page.wait_for_url("**/panel/main**", timeout=60000)
             print_log("登录成功! 已跳转到仪表盘。", important=True)
             return True
         except Exception as e:
-            print_log(f"登录状态验证失败 (按下Enter后): {str(e)}", "error", important=True)
+            print_log(f"登录状态验证失败 (点击 Login 后): {str(e)}", "error", important=True)
             print_log("!!!!!! 严重警告: 脚本已成功提交登录, 但未跳转到仪表盘! 99% 的可能是 DP_PASSWORD 错误! (请再次确认!) !!!!!!", "error", important=True)
-            await page.screenshot(path="login_failed_after_enter_error.png")
+            await page.screenshot(path="login_failed_after_login_click_error.png")
             return False
             
     except Exception as e:
