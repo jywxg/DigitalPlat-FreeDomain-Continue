@@ -5,6 +5,7 @@
 # (已修正 do_login 逻辑以等待元素可见)
 # (已修正 print_log 中的 Color.END 拼写错误)
 # (已修正 do_login 的交互顺序)
+# (最终修正: 已将 .fill() 替换为 .type() 来模拟真人)
 
 import asyncio
 import os
@@ -154,25 +155,30 @@ async def do_login(page):
             await page.screenshot(path="login_email_not_visible_error.png")
             raise Exception("登录失败：Email 输入框未变为可见")
 
-        # 步骤 B: [新逻辑] 先填写 Email，以触发 JS
-        print_log("正在填写 Email (以触发页面 JS)...")
-        await email_input.click() # 模拟点击
-        await email_input.fill(CONFIG["email"])
+        # 步骤 B: [最终逻辑] 模拟人类[点击]和[键入]，而不是[填充]
+        print_log("正在模拟[键入] Email (以触发页面 JS)...")
+        await email_input.click()
+        # vvvvvvvvvvvv 关键修改 vvvvvvvvvvvv
+        await email_input.type(CONFIG["email"], delay=random.randint(50, 150))
+        # ^^^^^^^^^^^^^^ 关键修改 ^^^^^^^^^^^^^^
 
-        # 步骤 C: [新逻辑] 现在再去等待 Password 输入框变为可见
+        # 步骤 C: [最终逻辑] 现在再去等待 Password 输入框变为可见
         password_input = page.locator('input[name="password"]')
         try:
-            # 页面JS应该很快反应，我们给它30秒
+            # 键入Email后，JS应该会显示密码框。我们给它30秒
             await password_input.wait_for(state="visible", timeout=30000)
             print_log("Password 输入框已可见。")
         except Exception as e:
             print_log(f"等待 Password 输入框[可见]超时: {e}", "error", important=True)
             await page.screenshot(path="login_password_not_visible_error.png")
-            raise Exception("登录失败：Password 输入框未变为可见 (Email 交互后)")
+            raise Exception("登录失败：Password 输入框未变为可见 (Email 键入后)")
 
-        # 步骤 D: 填写 Password
-        print_log("正在填写 Password...")
-        await password_input.fill(CONFIG["password"])
+        # 步骤 D: 模拟[键入] Password
+        print_log("正在模拟[键入] Password...")
+        await password_input.click()
+        # vvvvvvvvvvvv 关键修改 vvvvvvvvvvvv
+        await password_input.type(CONFIG["password"], delay=random.randint(50, 150))
+        # ^^^^^^^^^^^^^^ 关键修改 ^^^^^^^^^^^^^^
         
         # 步骤 E: 点击登录
         await page.click('button[type="submit"]')
@@ -225,7 +231,7 @@ async def renew_domains(page):
                         print_log(f"[{i}/{len(rows)}] {domain} - 无需续期", "warning")
                         continue
 
-                    print_log(f"[{i}/{len(rows)}] {domain} - 正在续期...")
+                    print_log(f"[{i}/{len(rows)}] {domain} - Z正在续期...")
                     await renew_btn.click()
                     
                     try:
