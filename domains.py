@@ -6,7 +6,7 @@
 # (已修正 print_log 中的 Color.END 拼写错误)
 # (已修正 do_login 的交互顺序)
 # (最终 Boss 修正: 启用 Headless=False 并更新 User-Agent)
-# (最终逻辑修正: 不再等待 Password 可见, 直接键入)
+# (最终逻辑修正: 完整的多阶段登录流程 - 根据用户的最终描述)
 
 import asyncio
 import os
@@ -141,52 +141,71 @@ async def init_browser():
 
 async def do_login(page):
     try:
-        print_log("正在访问登录页面...")
-        await page.goto("https://dash.domain.digitalplat.org/auth/login", timeout=CONFIG["timeout"])
+        print_log("正在访问登录页面 (阶段 1: Email)...")
+        # 增加 navigation 超时
+        await page.goto("https://dash.domain.digitalplat.org/auth/login", timeout=CONFIG["timeout"], wait_until="networkidle")
         
-        print_log("等待登录表单变为[可见]状态...")
+        # --- 阶段 1: Email (无 CF 盾) ---
         
         # 步骤 A: 等待 Email 输入框变为可见
         email_input = page.locator('input[name="email"]')
         try:
-            # 等待3分钟，应对 CF 盾
-            await email_input.wait_for(state="visible", timeout=180000)
+            # (您说这里没有CF盾, 应该会很快)
+            await email_input.wait_for(state="visible", timeout=30000) # 缩短超时
             print_log("Email 输入框已可见。")
         except Exception as e:
             print_log(f"等待 Email 输入框[可见]超时: {e}", "error", important=True)
             await page.screenshot(path="login_email_not_visible_error.png")
             raise Exception("登录失败：Email 输入框未变为可见")
 
-        # 步骤 B: 模拟人类[点击]和[键入] Email
-        print_log("正在模拟[键入] Email (以触发页面 JS)...")
+        # 步骤 B: 模拟键入 Email
+        print_log("正在模拟[键入] Email ...")
         await email_input.click()
         await email_input.type(CONFIG["email"], delay=random.randint(50, 150))
         
-        # 步骤 C: [最终逻辑] 不再等待/点击 Password！直接键入！
-        print_log("正在模拟[键入] Password (即使它是隐藏的)...")
+        # 步骤 C: 点击 "Next" 按钮
+        submit_btn_step1 = page.locator('button[type="submit"]')
+        try:
+            print_log("正在点击 'Next' (提交) 按钮...")
+            # 点击后, 页面会跳转并触发您所说的“ CF 5秒盾”
+            await submit_btn_step1.click()
+        except Exception as e:
+            print_log(f"点击 'Next' 按钮失败: {e}", "error")
+            await page.screenshot(path="login_next_button_click_error.png")
+            raise Exception("登录失败：点击 Next 按钮失败")
+
+        # --- 阶段 2: Password (有 CF 盾) ---
+        
+        # 步骤 D: 等待 Password 输入框变为可见 (等待 CF 5秒盾)
+        print_log("等待页面跳转到密码框 (阶段 2)... (正在等待唯一的 CF 5秒盾...)")
         password_input = page.locator('input[name="password"]')
         try:
-            # vvvvvvvvvvvv 关键修改 vvvvvvvvvvvv
-            # .type() 会自动等待元素、点击、然后键入。
-            # 我们给它一个30秒的超时时间，以防万一。
-            await password_input.type(CONFIG["password"], delay=random.randint(50, 150), timeout=30000)
-            print_log("Password 键入成功。")
-            # ^^^^^^^^^^^^^^ 关键修改 ^^^^^^^^^^^^^^
+            # (这是关键!) 给它一个很长的超时时间(3分钟)，以通过您说的“ CF 5秒盾”
+            await password_input.wait_for(state="visible", timeout=180000)
+            print_log("Password 输入框已可见。(CF 盾已通过!)")
         except Exception as e:
-            print_log(f"键入 Password 时超时: {e}", "error", important=True)
-            await page.screenshot(path="login_password_type_error.png")
-            raise Exception("登录失败：键入 Password 失败 (可能仍被隐藏)")
+            print_log(f"等待 Password 输入框[可见]超时 (阶段 2): {e}", "error", important=True)
+            await page.screenshot(path="login_password_not_visible_error.png")
+            raise Exception("登录失败：Password 输入框未变为可见 (卡在CF盾)")
+
+        # 步骤 E: 模拟[键入] Password
+        print_log("正在模拟[键入] Password...")
+        await password_input.type(CONFIG["password"], delay=random.randint(50, 150))
         
-        # 步骤 D: 点击登录
-        await page.click('button[type="submit"]')
+        # 步骤 F: 点击 "Login" 按钮
+        submit_btn_step2 = page.locator('button[type="submit"]')
+        print_log("正在点击 'Login' 按钮...")
+        await submit_btn_step2.click()
         
+        # 步骤 G: 等待登录成功 (等待跳转到仪表盘)
         try:
+            # 点击 Login 后, 我们将等待页面跳转到仪表盘
             await page.wait_for_url("**/panel/main**", timeout=60000)
-            print_log("登录成功", important=True)
+            print_log("登录成功! 已跳转到仪表盘。", important=True)
             return True
         except Exception as e:
-            print_log(f"登录状态验证失败: {str(e)}", "error")
-            await page.screenshot(path="login_failed_error.png")
+            print_log(f"登录状态验证失败 (点击 Login 后): {str(e)}", "error")
+            await page.screenshot(path="login_failed_after_login_click_error.png")
             return False
             
     except Exception as e:
@@ -207,8 +226,9 @@ async def renew_domains(page):
     
     try:
         print_log("正在加载域名列表...")
+        # 登录成功后, 第一次加载域名列表
         await page.goto("https://dash.domain.digitalplat.org/panel/main?page=%2Fpanel%2Fdomains", 
-                       timeout=CONFIG["timeout"])
+                       timeout=CONFIG["timeout"], wait_until="networkidle")
         
         try:
             await page.wait_for_selector('table tbody tr', timeout=60000)
@@ -232,6 +252,7 @@ async def renew_domains(page):
                     await renew_btn.click()
                     
                     try:
+                        # 等待续期后的“确认”按钮
                         await page.wait_for_selector('text=确认', timeout=15000)
                         await page.click('text=确认')
                         await asyncio.sleep(3 + random.uniform(0, 1))
@@ -242,12 +263,17 @@ async def renew_domains(page):
                         print_log(f"[{i}/{len(rows)}] {domain} - {error_msg}", "error")
                         report["failed"].append(domain)
                         report["errors"].append(error_msg)
+                        # 续期失败后，需要返回域名列表
+                        await page.goto("https://dash.domain.digitalplat.org/panel/main?page=%2Fpanel%2Fdomains", timeout=CONFIG["timeout"])
+
 
                 except Exception as e:
                     error_msg = f"处理失败: {str(e)[:80]}"
                     print_log(f"[{i}/{len(rows)}] {domain} - {error_msg}", "error")
                     report["failed"].append(domain)
                     report["errors"].append(error_msg)
+                    # 续期失败后，需要返回域名列表
+                    await page.goto("https://dash.domain.digitalplat.org/panel/main?page=%2Fpanel%2Fdomains", timeout=CONFIG["timeout"])
                     
         except Exception as e:
             error_msg = f"加载域名列表失败: {str(e)}"
