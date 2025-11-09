@@ -1,13 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-# (已修正登录 URL)
-# (已修正 do_login 逻辑以等待元素可见)
-# (已修正 print_log 中的 Color.END 拼写错误)
-# (已修正 do_login 的交互顺序)
-# (最终 Boss 修正: 启用 Headless=False 并更新 User-Agent)
-# (最终逻辑修正: 完整的多阶段登录流程 - 根据用户的最终描述)
-# (最终绝招: 放弃 Playwright 的 click/press, 使用 page.evaluate() 强制执行 JavaScript 点击)
+# (这是最终的 Python 脚本)
+# (它正确地处理了“多阶段登录”和“按回车”提交)
+# (它必须配合 'xvfb-run' 和 'headless=False' 运行)
 
 import asyncio
 import os
@@ -137,7 +133,7 @@ async def init_browser():
         raise
 
 # ------------------------------------------
-# vvvvvvvvvvvv 关键修改在这里 vvvvvvvvvvvv
+# (这是正确的“多阶段”+“按回车”登录逻辑)
 # ------------------------------------------
 
 async def do_login(page):
@@ -164,16 +160,9 @@ async def do_login(page):
         await email_input.click()
         await email_input.type(CONFIG["email"], delay=random.randint(50, 150))
         
-        # 步骤 C: [最终绝招] 使用 JS 强制点击 "Next" 按钮, 无视它是否可见
-        print_log("正在用 JS 强制点击 'Next' (提交) 按钮...")
-        try:
-            # vvvvvvvvvvvv 关键修改 vvvvvvvvvvvv
-            await page.evaluate('document.querySelector("button[type=\\"submit\\"]").click()')
-            # ^^^^^^^^^^^^^^ 关键修改 ^^^^^^^^^^^^^^
-        except Exception as e:
-            print_log(f"JS 强制点击 'Next' 按钮失败: {e}", "error")
-            await page.screenshot(path="login_next_button_js_click_error.png")
-            raise Exception("登录失败：JS 强制点击 Next 按钮失败")
+        # 步骤 C: [最终逻辑] 模拟按 [Enter] 键提交 Email
+        print_log("正在模拟按 [Enter] 键提交 Email (绕过'Next'按钮)...")
+        await email_input.press('Enter')
 
         # --- 阶段 2: Password (有 CF 盾) ---
         
@@ -193,16 +182,9 @@ async def do_login(page):
         print_log("正在模拟[键入] Password...")
         await password_input.type(CONFIG["password"], delay=random.randint(50, 150))
         
-        # 步骤 F: [最终绝招] 使用 JS 强制点击 "Login" 按钮
-        print_log("正在用 JS 强制点击 'Login' 按钮...")
-        try:
-            # vvvvvvvvvvvv 关键修改 vvvvvvvvvvvv
-            await page.evaluate('document.querySelector("button[type=\\"submit\\"]").click()')
-            # ^^^^^^^^^^^^^^ 关键修改 ^^^^^^^^^^^^^^
-        except Exception as e:
-            print_log(f"JS 强制点击 'Login' 按钮失败: {e}", "error")
-            await page.screenshot(path="login_login_button_js_click_error.png")
-            raise Exception("登录失败：JS 强制点击 Login 按钮失败")
+        # 步骤 F: [最终逻辑] 模拟按 [Enter] 键提交 Password
+        print_log("正在模拟按 [Enter] 键提交 Password (绕过'Login'按钮)...")
+        await password_input.press('Enter')
         
         # 步骤 G: 等待登录成功 (等待跳转到仪表盘)
         try:
@@ -211,9 +193,9 @@ async def do_login(page):
             print_log("登录成功! 已跳转到仪表盘。", important=True)
             return True
         except Exception as e:
-            print_log(f"登录状态验证失败 (点击 Login 后): {str(e)}", "error", important=True)
+            print_log(f"登录状态验证失败 (按下Enter后): {str(e)}", "error", important=True)
             print_log("!!!!!! 严重警告: 脚本已成功提交登录, 但未跳转到仪表盘! 99% 的可能是 DP_PASSWORD 错误! (请再次确认!) !!!!!!", "error", important=True)
-            await page.screenshot(path="login_failed_after_login_click_error.png")
+            await page.screenshot(path="login_failed_after_enter_error.png")
             return False
             
     except Exception as e:
